@@ -1,0 +1,28 @@
+name: darul
+
+services:
+  neo4j:
+    image: neo4j:5.26-community
+    restart: unless-stopped
+    env_file:
+      - .graph_engine/neo4j.env
+    environment:
+      NEO4J_server_memory_heap_initial__size: 512m
+      NEO4J_server_memory_heap_max__size: 1g
+      NEO4J_server_memory_pagecache_size: 512m
+    ports:
+      - "${GRAPH_HTTP_BIND_ADDRESS:-127.0.0.1}:7474:7474"
+      - "${GRAPH_DB_BIND_ADDRESS:-127.0.0.1}:7687:7687"
+    volumes:
+      - darul-neo4j-data:/data
+      - darul-neo4j-logs:/logs
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -a bolt://localhost:7687 -u neo4j -p \"$${GRAPH_DB_PASS}\" 'RETURN 1' >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+volumes:
+  darul-neo4j-data:
+  darul-neo4j-logs:

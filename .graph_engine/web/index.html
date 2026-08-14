@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="theme-color" content="#d83c2e">
+  <title>Darul Graph Atlas</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <svg class="svg-defs" aria-hidden="true">
+    <symbol id="icon-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></symbol>
+    <symbol id="icon-fit" viewBox="0 0 24 24"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/></symbol>
+    <symbol id="icon-refresh" viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M18.1 9A7 7 0 0 0 6 6.1L4 8m2 7a7 7 0 0 0 12 2.9l2-1.9"/></symbol>
+    <symbol id="icon-unfold" viewBox="0 0 24 24"><path d="m4 4 8 4 8-4v16l-8-4-8 4Z"/><path d="M12 8v8M4 4l8 12L20 4"/></symbol>
+    <symbol id="icon-filter" viewBox="0 0 24 24"><path d="M4 5h16M7 12h10M10 19h4"/></symbol>
+    <symbol id="icon-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.2"/></symbol>
+    <symbol id="icon-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+    <symbol id="icon-arrow" viewBox="0 0 24 24"><path d="M5 12h14M14 7l5 5-5 5"/></symbol>
+    <symbol id="icon-menu" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
+  </svg>
+
+  <header class="masthead">
+    <a class="brand" href="/" aria-label="Darul Graph Atlas home">
+      <span class="fold-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+      <span><b>DARUL</b><small>Graph Atlas</small></span>
+    </a>
+    <div class="graph-summary" aria-live="polite">
+      <span id="summary-repo">All repositories</span>
+      <i></i>
+      <span id="summary-count">Loading graph</span>
+    </div>
+    <div class="mast-actions">
+      <button class="text-button" id="keyboard-help" type="button" aria-haspopup="dialog" aria-expanded="false">Keys</button>
+      <button class="icon-button mobile-only" id="open-controls" type="button" aria-label="Open graph controls" aria-controls="scope-rail" aria-expanded="false">
+        <svg><use href="#icon-menu"></use></svg>
+      </button>
+    </div>
+  </header>
+
+  <main class="atlas-shell">
+    <aside class="scope-rail" id="scope-rail" aria-label="Graph scope controls">
+      <div class="rail-heading">
+        <div><span>Scope sheet</span><strong>Choose what remains visible.</strong></div>
+        <button class="icon-button mobile-only" id="close-controls" type="button" aria-label="Close graph controls"><svg><use href="#icon-close"></use></svg></button>
+      </div>
+
+      <label class="field-label" for="repository">Repository</label>
+      <div class="select-wrap">
+        <select id="repository"><option value="">All repositories</option></select>
+      </div>
+
+      <label class="field-label" for="search">Find a form</label>
+      <div class="search-field">
+        <svg aria-hidden="true"><use href="#icon-search"></use></svg>
+        <input id="search" type="search" placeholder="File, symbol, route, decision…" autocomplete="off">
+        <kbd>/</kbd>
+      </div>
+
+      <section class="filter-section" aria-labelledby="forms-title">
+        <div class="section-heading"><h2 id="forms-title">Forms</h2><button id="toggle-labels" type="button">All</button></div>
+        <div class="filter-list" id="label-filters"></div>
+      </section>
+
+      <section class="filter-section relationships" aria-labelledby="relations-title">
+        <div class="section-heading"><h2 id="relations-title">Creases</h2><button id="toggle-relations" type="button">All</button></div>
+        <div class="filter-list compact" id="relationship-filters"></div>
+      </section>
+
+      <div class="density-control">
+        <label for="node-limit"><span>Sheet density</span><output id="node-limit-value">240 forms</output></label>
+        <input id="node-limit" type="range" min="80" max="600" step="40" value="240">
+      </div>
+
+      <p class="rail-note">Double-click a form to fold the sheet into its two-hop neighborhood.</p>
+    </aside>
+
+    <section class="graph-stage" aria-label="Knowledge graph visualization">
+      <div class="stage-toolbar">
+        <div class="view-mode" role="group" aria-label="Graph layout">
+          <button class="active" data-layout="fold" type="button" aria-pressed="true">Folded</button>
+          <button data-layout="free" type="button" aria-pressed="false">Free sheet</button>
+        </div>
+        <div class="tool-cluster">
+          <button class="tool-button" id="unfold" type="button" disabled><svg><use href="#icon-unfold"></use></svg><span>Unfold</span></button>
+          <button class="tool-button" id="fit-graph" type="button"><svg><use href="#icon-fit"></use></svg><span>Fit</span></button>
+          <button class="tool-button" id="refresh-graph" type="button"><svg><use href="#icon-refresh"></use></svg><span>Refresh</span></button>
+        </div>
+      </div>
+
+      <div class="paper-sheet" id="paper-sheet">
+        <canvas id="graph-canvas" tabindex="0" aria-label="Interactive code knowledge graph. Use arrow keys to move between nodes, Enter to inspect, and F to fold into a neighborhood."></canvas>
+        <ul class="sr-only" id="node-access-list" aria-label="Visible graph nodes"></ul>
+        <div class="paper-fibers" aria-hidden="true"></div>
+        <div class="graph-loading" id="graph-loading">
+          <span class="fold-loader"><i></i><i></i></span>
+          <strong>Opening the graph sheet</strong>
+          <small>Reading forms and creases from Neo4j</small>
+        </div>
+        <div class="graph-empty" id="graph-empty" hidden>
+          <span class="empty-fold" aria-hidden="true"></span>
+          <strong>No forms on this sheet.</strong>
+          <p>Clear a filter or search a broader repository.</p>
+          <button id="clear-filters" type="button">Reset the sheet</button>
+        </div>
+        <div class="canvas-hint" id="canvas-hint">Drag to move · Scroll to zoom · Double-click to fold</div>
+        <div class="zoom-readout" id="zoom-readout">100%</div>
+      </div>
+
+      <div class="legend" id="legend" aria-label="Node shape legend"></div>
+    </section>
+
+    <aside class="inspector" id="inspector" aria-label="Selected node details">
+      <div class="step-index">
+        <span>Exploration folds</span>
+        <ol id="fold-history"><li class="active"><i></i><button type="button">Full sheet</button></li></ol>
+      </div>
+
+      <div class="inspector-empty" id="inspector-empty">
+        <span class="gold-dot"></span>
+        <div class="crease-symbol" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+        <h2>Select a form</h2>
+        <p>Inspect its identity, properties, and immediate structural relationships without leaving the sheet.</p>
+      </div>
+
+      <div class="inspector-content" id="inspector-content" hidden>
+        <div class="node-heading">
+          <span class="node-number" id="node-number">01</span>
+          <div><div class="node-kinds" id="node-kinds"></div><h2 id="node-title"></h2></div>
+        </div>
+        <div class="inspector-actions">
+          <button class="primary-action" id="fold-node" type="button">Fold to neighborhood <svg><use href="#icon-arrow"></use></svg></button>
+        </div>
+        <section class="property-section">
+          <h3>Properties</h3>
+          <dl id="node-properties"></dl>
+        </section>
+        <section class="neighbor-section">
+          <div class="section-heading"><h3>Connected forms</h3><span id="neighbor-count"></span></div>
+          <div class="neighbor-list" id="neighbor-list"></div>
+        </section>
+      </div>
+
+      <button class="mobile-inspector-close mobile-only" id="close-inspector" type="button" aria-label="Close details"><svg><use href="#icon-close"></use></svg></button>
+    </aside>
+  </main>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <div class="key-dialog" id="key-dialog" hidden>
+    <button class="dialog-backdrop" type="button" aria-label="Close keyboard help"></button>
+    <section role="dialog" aria-modal="true" aria-labelledby="key-title">
+      <button class="icon-button dialog-close" type="button" aria-label="Close keyboard help"><svg><use href="#icon-close"></use></svg></button>
+      <h2 id="key-title">Move through the sheet</h2>
+      <dl><div><dt><kbd>/</kbd></dt><dd>Focus search</dd></div><div><dt><kbd>←</kbd><kbd>→</kbd></dt><dd>Move between forms</dd></div><div><dt><kbd>Enter</kbd></dt><dd>Inspect selected form</dd></div><div><dt><kbd>F</kbd></dt><dd>Fold to neighborhood</dd></div><div><dt><kbd>Esc</kbd></dt><dd>Close or unfold</dd></div><div><dt><kbd>0</kbd></dt><dd>Fit sheet to view</dd></div></dl>
+    </section>
+  </div>
+
+  <script src="/app.js" defer></script>
+</body>
+</html>

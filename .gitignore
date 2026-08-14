@@ -1,0 +1,26 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+.env*
+!.env.example
+.graph_engine/*.env
+!.graph_engine/*.env.example
+*.log
+.DS_Store
+.idea/
+.vscode/
+dist/
+build/
+
+# Local agent prompts, design-review sessions, and generated review artifacts.
+.impeccable/
+AGENTS.md
+
+# Local agent and editor state.
+.agents/
+.codex/

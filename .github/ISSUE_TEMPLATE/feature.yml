@@ -1,0 +1,32 @@
+name: Feature request
+description: Propose a parser, graph, workflow, or visualization improvement
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What repository-analysis or retrieval problem should Darul solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe inputs, graph output, CLI or UI behavior, and compatibility impact.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: checkboxes
+    id: principles
+    attributes:
+      label: Project principles
+      options:
+        - label: The proposal can remain local and deterministic.
+          required: true
+        - label: The proposal preserves cross-repository identity safety.
+          required: true
