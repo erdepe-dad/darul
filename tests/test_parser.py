@@ -294,6 +294,38 @@ public class RemoteResourceClient {
         requests = [(request.method, request.normalized_url) for request in parsed.requests]
         self.assertEqual(requests, [("DELETE", "/api/surveys/delete/{param}")])
 
+    def test_java_request_resolves_url_helpers_and_quoted_config_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "ConfiguredApiClient.java"
+            source.write_text(
+                '''import org.springframework.web.client.RestTemplate;
+public class ConfiguredApiClient {
+    RestTemplate restTemplate;
+    String getBaseUrl() {
+        return config.getConfigValue(Constants.SECONDARY_API_URL) + "/api/resources";
+    }
+    void categories() {
+        String url = getBaseUrl() + "/categories";
+        restTemplate.exchange(url, HttpMethod.GET, null, String.class);
+    }
+    void download() {
+        String url = new Config().getConfig("ASSET_API_URL").getValue() + "/api/car";
+        restTemplate().getForObject(url, String.class);
+    }
+}
+''',
+                encoding="utf-8",
+            )
+            parsed = parse_file(source, settings_for(root))
+
+        requests = {
+            (request.method, request.normalized_url, request.system)
+            for request in parsed.requests
+        }
+        self.assertIn(("GET", "/api/resources/categories", "SECONDARY_API_URL"), requests)
+        self.assertIn(("GET", "/api/car", "ASSET_API_URL"), requests)
+
     def test_java_vaadin_8_spring_view_and_exchange_variable(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

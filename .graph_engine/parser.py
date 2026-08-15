@@ -504,17 +504,30 @@ def _java_system_hint(expression: str, text: str) -> str:
     direct = re.search(r"\b([A-Z][A-Z0-9_]*(?:URL|URL_KEY|_URL_KEY))\b", expression)
     if direct:
         return direct.group(1)
-    receiver = re.match(r"\s*([A-Za-z_$][\w$]*)\s*\+", expression)
+    config_call = re.search(
+        r"\bgetConfig(?:Value)?\s*\(\s*(?:[A-Za-z_$][\w$]*\.)?"
+        r"(?:([A-Z][A-Z0-9_]*)|\"([^\"]+)\")\s*\)",
+        expression,
+    )
+    if config_call:
+        key = config_call.group(1) or config_call.group(2)
+        return constants.get(key, key)
+    receiver = re.match(
+        r"\s*([A-Za-z_$][\w$]*)(?:\.[A-Za-z_$][\w$]*\s*\([^)]*\))*\s*\+",
+        expression,
+    )
     if not receiver:
         return ""
     variable = receiver.group(1)
     assignment = re.search(
-        rf"\b{re.escape(variable)}\s*=\s*[^;]*?getConfig\s*\(\s*([A-Za-z_$][\w$]*)\s*\)",
+        rf"\b{re.escape(variable)}\s*=\s*[^;]*?getConfig(?:Value)?\s*\(\s*"
+        rf"(?:[A-Za-z_$][\w$]*\.)?(?:([A-Z][A-Z0-9_]*)|\"([^\"]+)\")\s*\)",
         text,
         re.DOTALL,
     )
     if assignment:
-        return constants.get(assignment.group(1), assignment.group(1))
+        key = assignment.group(1) or assignment.group(2)
+        return constants.get(key, key)
     return variable
 
 
@@ -769,13 +782,18 @@ def _spring_view_route(text: str) -> str | None:
     return None
 
 
-def _java_service_base_url(text: str) -> str | None:
-    match = re.search(
-        r"\bString\s+getServiceUrl\s*\([^)]*\)\s*\{.*?\breturn\s+(.*?);",
-        text,
+def _java_url_helpers(text: str) -> dict[str, tuple[str, str]]:
+    helpers: dict[str, tuple[str, str]] = {}
+    pattern = re.compile(
+        r"\bString\s+([A-Za-z_$][\w$]*(?:Url|URL))\s*\([^)]*\)\s*\{"
+        r".*?\breturn\s+(.*?);",
         re.DOTALL,
     )
-    return _java_expression_url(match.group(1)) if match else None
+    for match in pattern.finditer(text):
+        expression = match.group(2)
+        if url := _java_expression_url(expression):
+            helpers[match.group(1)] = (url, _java_system_hint(expression, text))
+    return helpers
 
 
 def _java_builder_path(text: str, offset: int) -> str:
@@ -996,7 +1014,8 @@ def _parse_java(
     }
     if "RestTemplate" in text or "restTemplate" in text:
         request_text = _mask_java_comments(text)
-        service_base = _java_service_base_url(request_text)
+        url_helpers = _java_url_helpers(request_text)
+        service_base = url_helpers.get("getServiceUrl", (None, ""))[0]
         rest_template_names = set(
             re.findall(r"\bRestTemplate\s+([A-Za-z_$][\w$]*)", request_text)
         )
@@ -1006,9 +1025,16 @@ def _parse_java(
                 add_request(rest_methods[operation], url, match.start())
         assignments: dict[str, list[tuple[int, str, str]]] = {}
         for assignment in JAVA_STRING_ASSIGNMENT_RE.finditer(request_text):
-            if url := _java_expression_url(assignment.group(2)):
+            expression = assignment.group(2)
+            if url := _java_expression_url(expression):
+                system = _java_system_hint(expression, request_text)
+                helper_call = re.match(r"\s*([A-Za-z_$][\w$]*)\s*\(\s*\)\s*\+", expression)
+                if helper_call and helper_call.group(1) in url_helpers:
+                    helper_url, helper_system = url_helpers[helper_call.group(1)]
+                    url = helper_url.rstrip("/") + url
+                    system = helper_system or system
                 assignments.setdefault(assignment.group(1), []).append(
-                    (assignment.start(), url, _java_system_hint(assignment.group(2), request_text))
+                    (assignment.start(), url, system)
                 )
         for match in JAVA_REST_TEMPLATE_FACTORY_RE.finditer(request_text):
             operation, url_argument = match.groups()
@@ -1032,14 +1058,7 @@ def _parse_java(
                     url = service_base.rstrip("/") + url
                 add_request(method, url, match.start(), system)
         if service_base:
-            service_system = _java_system_hint(
-                re.search(
-                    r"\bString\s+getServiceUrl\s*\([^)]*\)\s*\{.*?\breturn\s+(.*?);",
-                    request_text,
-                    re.DOTALL,
-                ).group(1),
-                request_text,
-            )
+            service_system = url_helpers["getServiceUrl"][1]
             for match in re.finditer(r"\b(findMany|findOne)\s*\(", request_text):
                 path = _java_builder_path(request_text, match.start())
                 add_request("GET", service_base.rstrip("/") + path, match.start(), service_system)
