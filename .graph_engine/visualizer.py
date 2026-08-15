@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hmac
 import mimetypes
 import threading
 import webbrowser
@@ -16,6 +17,13 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from .config import SETTINGS, Settings
 from .db import GraphDB, GraphEngineError
+from .operator_api import (
+    OperationManager,
+    OperatorService,
+    create_operation_manager,
+    operator_origins,
+    operator_token,
+)
 from .tracer import trace_view
 
 
@@ -254,6 +262,10 @@ class GraphVisualizationService:
 class VisualizationApplication:
     service: GraphVisualizationService
     web_root: Path = WEB_ROOT
+    operator_service: OperatorService | None = None
+    operation_manager: OperationManager | None = None
+    allowed_origins: frozenset[str] = frozenset()
+    mutation_token: str = ""
 
     def handler_class(self) -> type[BaseHTTPRequestHandler]:
         application = self
@@ -271,8 +283,57 @@ class VisualizationApplication:
                 self.send_header("Content-Length", str(len(body)))
                 self.send_header("Cache-Control", "no-store")
                 self.send_header("X-Content-Type-Options", "nosniff")
+                self._send_cors_headers()
                 self.end_headers()
                 self.wfile.write(body)
+
+            def _send_cors_headers(self) -> None:
+                origin = self.headers.get("Origin", "").rstrip("/")
+                if origin and origin in application.allowed_origins:
+                    self.send_header("Access-Control-Allow-Origin", origin)
+                    self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
+                    self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+                    self.send_header("Vary", "Origin")
+
+            def _read_json(self) -> dict[str, Any]:
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                except ValueError as exc:
+                    raise ValueError("invalid content length") from exc
+                if length <= 0 or length > 65_536:
+                    raise ValueError("request body must be between 1 and 65536 bytes")
+                payload = json.loads(self.rfile.read(length))
+                if not isinstance(payload, dict):
+                    raise ValueError("request body must be a JSON object")
+                return payload
+
+            def _operator(self) -> tuple[OperatorService, OperationManager]:
+                if application.operator_service is None or application.operation_manager is None:
+                    raise GraphEngineError("operator API is unavailable")
+                return application.operator_service, application.operation_manager
+
+            def _require_mutation_token(self) -> bool:
+                expected = application.mutation_token
+                if not expected:
+                    self._send_json(
+                        {"error": "DARUL_OPERATOR_TOKEN is not configured"},
+                        HTTPStatus.SERVICE_UNAVAILABLE,
+                    )
+                    return False
+                supplied = self.headers.get("Authorization", "")
+                if not supplied.startswith("Bearer ") or not hmac.compare_digest(supplied[7:], expected):
+                    self._send_json({"error": "operator authorization failed"}, HTTPStatus.UNAUTHORIZED)
+                    return False
+                return True
+
+            def do_OPTIONS(self) -> None:
+                origin = self.headers.get("Origin", "").rstrip("/")
+                if origin not in application.allowed_origins:
+                    self.send_error(HTTPStatus.FORBIDDEN)
+                    return
+                self.send_response(HTTPStatus.NO_CONTENT)
+                self._send_cors_headers()
+                self.end_headers()
 
             def _query_list(self, query: dict[str, list[str]], name: str) -> list[str]:
                 return [item for value in query.get(name, []) for item in value.split(",") if item]
@@ -283,6 +344,26 @@ class VisualizationApplication:
                 try:
                     if parsed.path == "/api/health":
                         self._send_json({"ok": True, "database": application.service.db.healthcheck()})
+                        return
+                    if parsed.path == "/api/operator/overview":
+                        operator, manager = self._operator()
+                        payload = operator.overview()
+                        payload["operations"] = manager.list()
+                        payload["mutations_enabled"] = bool(application.mutation_token)
+                        self._send_json(payload)
+                        return
+                    if parsed.path == "/api/operator/unresolved":
+                        operator, _ = self._operator()
+                        self._send_json(
+                            operator.unresolved(
+                                query.get("repository", [""])[0],
+                                int(query.get("limit", ["100"])[0]),
+                            )
+                        )
+                        return
+                    if parsed.path == "/api/operator/operations":
+                        _, manager = self._operator()
+                        self._send_json({"operations": manager.list()})
                         return
                     if parsed.path == "/api/meta":
                         self._send_json(application.service.metadata())
@@ -330,6 +411,37 @@ class VisualizationApplication:
                 except BrokenPipeError:
                     return
 
+            def do_POST(self) -> None:
+                parsed = urlparse(self.path)
+                try:
+                    if not parsed.path.startswith("/api/operator/"):
+                        self._send_json({"error": "Unknown API endpoint"}, HTTPStatus.NOT_FOUND)
+                        return
+                    if not self._require_mutation_token():
+                        return
+                    payload = self._read_json()
+                    operator, manager = self._operator()
+                    if parsed.path == "/api/operator/services":
+                        self._send_json(operator.set_service(payload), HTTPStatus.CREATED)
+                        return
+                    if parsed.path == "/api/operator/services/clear":
+                        self._send_json(operator.clear_service(payload))
+                        return
+                    if parsed.path == "/api/operator/operations":
+                        operation = manager.start(
+                            str(payload.get("action") or ""),
+                            str(payload.get("repository") or ""),
+                        )
+                        self._send_json(operation, HTTPStatus.ACCEPTED)
+                        return
+                    self._send_json({"error": "Unknown API endpoint"}, HTTPStatus.NOT_FOUND)
+                except (ValueError, json.JSONDecodeError) as exc:
+                    self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                except GraphEngineError as exc:
+                    self._send_json({"error": str(exc)}, HTTPStatus.BAD_GATEWAY)
+                except BrokenPipeError:
+                    return
+
             def _serve_static(self, request_path: str) -> None:
                 relative = "index.html" if request_path in {"", "/"} else unquote(request_path.lstrip("/"))
                 candidate = (application.web_root / relative).resolve()
@@ -360,7 +472,13 @@ def serve_visualization(
     settings: Settings = SETTINGS,
 ) -> None:
     db = GraphDB(settings).connect()
-    application = VisualizationApplication(GraphVisualizationService(db, settings))
+    application = VisualizationApplication(
+        GraphVisualizationService(db, settings),
+        operator_service=OperatorService(db, settings),
+        operation_manager=create_operation_manager(settings),
+        allowed_origins=operator_origins(),
+        mutation_token=operator_token(),
+    )
     server = ThreadingHTTPServer((host, port), application.handler_class())
     display_host = "127.0.0.1" if host in {"0.0.0.0", "::"} else host
     url = f"http://{display_host}:{server.server_port}/"

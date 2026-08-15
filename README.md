@@ -82,6 +82,12 @@ Darul reads process environment variables first, then `.env`, then `.graph_engin
 | `GRAPH_ENGINE_WORKERS` | up to 4 CPUs | Parser process count; set to `1` for sequential scans |
 | `GRAPH_ENGINE_JSON_API_PREFIXES` | discovered from properties | Optional comma-separated CRNK/Katharsis server prefixes when configuration lives outside the repository |
 | `GRAPH_TUNNEL_HOSTNAME` | none | Cloudflare Access TCP hostname used by the helper script |
+| `DARUL_OPERATOR_TOKEN` | none | Bearer token required for build, sync, and service-mapping HTTP mutations |
+| `DARUL_OPERATOR_ORIGINS` | local ports 4173/5173 | Exact comma-separated browser origins allowed to call the operator API |
+| `DARUL_REPO_PARENT` | parent of Darul | Parent directory used to resolve bounded repository names for operator actions |
+| `DARUL_REPO_ROOTS` | none | Optional `name=/path` comma-separated overrides for operable repositories |
+| `DARUL_OPERATOR_WORKERS` | `1` | Background build/sync concurrency, bounded to two workers |
+| `DARUL_OPERATOR_TIMEOUT` | `900` | Maximum seconds for one background build or sync operation |
 
 For a manual setup, copy the safe template and replace both password placeholders with the same random value:
 
@@ -177,6 +183,7 @@ The Folded Neighborhood atlas supports:
 Database credentials remain in the Python process. The browser receives only read-only JSON graph results.
 
 Binding the server to `0.0.0.0` exposes repository metadata to the network without application-level authentication. Use localhost by default and put Cloudflare Access, a trusted reverse proxy, or an equivalent authentication layer in front of remote deployments.
+
 
 ### Connecting Flowable and worker services
 
