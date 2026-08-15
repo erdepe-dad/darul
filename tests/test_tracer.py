@@ -4,7 +4,11 @@ import unittest
 from pathlib import Path
 
 from graph_engine.config import Settings
-from graph_engine.tracer import _request_resolution_warning, trace_view
+from graph_engine.tracer import (
+    _request_resolution_warning,
+    _workflow_resolution_warning,
+    trace_view,
+)
 
 
 class FakeDB:
@@ -67,6 +71,37 @@ class TracerTests(unittest.TestCase):
         links = [{"source": "request", "target": "route", "type": "TARGETS_ROUTE"}]
 
         self.assertIsNone(_request_resolution_warning(nodes, links))
+
+    def test_unresolved_workflow_starts_are_reported_without_generic_noise(self) -> None:
+        nodes = {
+            "start": {
+                "id": "start",
+                "label": "Start approval",
+                "labels": ["WorkflowStart"],
+                "properties": {"process_key": "approval"},
+            }
+        }
+
+        warning = _workflow_resolution_warning(nodes, [])
+
+        self.assertEqual(
+            warning,
+            "No workflow start in this trace resolves to an ingested BPMN process: approval.",
+        )
+        self.assertIsNone(_workflow_resolution_warning({}, []))
+
+    def test_resolved_workflow_start_has_no_warning(self) -> None:
+        nodes = {
+            "start": {
+                "id": "start",
+                "label": "Start approval",
+                "labels": ["WorkflowStart"],
+                "properties": {"process_key": "approval"},
+            }
+        }
+        links = [{"source": "start", "target": "process", "type": "RESOLVES_TO"}]
+
+        self.assertIsNone(_workflow_resolution_warning(nodes, links))
 
     def test_trace_groups_lanes_and_marks_alternatives(self) -> None:
         settings = Settings(Path("/tmp"), "sample-web", "bolt://unused", "neo4j", "x", None, 1, frozenset())

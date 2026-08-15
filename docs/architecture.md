@@ -52,6 +52,7 @@ Do not change ID generation without a migration plan. IDs are referenced by deci
 (WorkflowStep)-[:INVOKES]->(Class)
 (WorkflowStep)-[:CALLS]->(WorkflowProcess)
 (Function)-[:DECLARES_START]->(WorkflowStart)
+(WorkflowStart)-[:RESOLVES_TO]->(WorkflowProcess)
 (Function)-[:STARTS_PROCESS]->(WorkflowProcess)
 (Function)-[:PUBLISHES_TO]->(MessageChannel)
 (MessageChannel)-[:ROUTES_TO|SAME_CHANNEL]->(MessageChannel)

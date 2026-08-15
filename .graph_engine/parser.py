@@ -1679,6 +1679,7 @@ MERGE (source)-[:DECLARES_START]->(start)
 STITCH_WORKFLOW_STARTS = """
 MATCH (source:Function)-[:DECLARES_START]->(start:WorkflowStart)
 MATCH (process:WorkflowProcess {process_key: start.process_key})
+MERGE (start)-[:RESOLVES_TO]->(process)
 MERGE (source)-[starts:STARTS_PROCESS {id: start.id}]->(process)
 SET starts.line = start.line
 """

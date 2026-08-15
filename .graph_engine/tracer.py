@@ -54,6 +54,7 @@ TRACE_RELATIONSHIPS = [
     "CONTAINS", "DEFINES", "HAS_ACTION", "DECLARED_IN", "CALLS", "MAKES_REQUEST",
     "TARGETS_ROUTE", "HANDLED_BY", "STARTS_PROCESS", "HAS_STEP", "NEXT", "INVOKES",
     "TARGETS_SYSTEM", "PUBLISHES_TO", "CONSUMED_BY", "ROUTES_TO", "SAME_CHANNEL",
+    "DECLARES_START", "RESOLVES_TO",
 ]
 
 
@@ -75,6 +76,8 @@ def _label(properties: dict[str, Any], labels: list[str]) -> str:
         return f"{properties.get('method', '?')} {properties.get('normalized_url', properties.get('url', ''))}"
     if "BackendRoute" in labels:
         return f"{properties.get('method', '?')} {properties.get('route_path', '')}"
+    if "WorkflowStart" in labels:
+        return f"Start {properties.get('process_key', 'unknown process')}"
     if "MessageChannel" in labels:
         return f"{properties.get('broker', 'message')} · {properties.get('channel', properties.get('name', 'channel'))}"
     return str(
@@ -90,7 +93,7 @@ def _label(properties: dict[str, Any], labels: list[str]) -> str:
 def _lane(
     labels: list[str], properties: dict[str, Any], source_repo: str, source_is_ui: bool,
 ) -> str:
-    if "WorkflowProcess" in labels or "WorkflowStep" in labels:
+    if "WorkflowProcess" in labels or "WorkflowStep" in labels or "WorkflowStart" in labels:
         return "Workflow"
     if "ExternalSystem" in labels:
         return "Systems"
@@ -132,6 +135,34 @@ def _request_resolution_warning(
     return (
         f"{len(unresolved)} of {len(endpoints)} API requests do not resolve to an "
         f"ingested backend route: {detail}."
+    )
+
+
+def _workflow_resolution_warning(
+    nodes: dict[str, dict[str, Any]], links: list[dict[str, Any]],
+) -> str | None:
+    starts = [
+        node for node in nodes.values()
+        if "WorkflowStart" in node["labels"]
+    ]
+    if not starts:
+        return None
+    resolved = {
+        link["source"] for link in links
+        if link["type"] == "RESOLVES_TO"
+    }
+    unresolved = [node for node in starts if node["id"] not in resolved]
+    if not unresolved:
+        return None
+    keys = [str(node["properties"].get("process_key") or "unknown") for node in unresolved[:3]]
+    detail = "; ".join(keys)
+    if len(unresolved) > len(keys):
+        detail += f"; +{len(unresolved) - len(keys)} more"
+    if len(unresolved) == len(starts):
+        return f"No workflow start in this trace resolves to an ingested BPMN process: {detail}."
+    return (
+        f"{len(unresolved)} of {len(starts)} workflow starts do not resolve to an "
+        f"ingested BPMN process: {detail}."
     )
 
 
@@ -205,7 +236,7 @@ def trace_view(
             break
     useful_labels = {
         "Page", "UIAction", "Function", "APIEndpoint", "BackendRoute",
-        "WorkflowProcess", "WorkflowStep", "ExternalSystem", "MessageChannel",
+        "WorkflowProcess", "WorkflowStep", "WorkflowStart", "ExternalSystem", "MessageChannel",
     }
     useful_nodes = {
         node_id: node
@@ -263,8 +294,8 @@ def trace_view(
     warnings: list[str] = []
     if request_warning := _request_resolution_warning(useful_nodes, useful_links):
         warnings.append(request_warning)
-    if not any("WorkflowProcess" in node["labels"] for node in useful_nodes.values()):
-        warnings.append("No statically linked Flowable process is reachable from this entry point.")
+    if workflow_warning := _workflow_resolution_warning(useful_nodes, useful_links):
+        warnings.append(workflow_warning)
     if truncated:
         warnings.append("The trace reached its path limit and may be incomplete.")
     result = {
