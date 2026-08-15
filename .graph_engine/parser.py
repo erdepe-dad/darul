@@ -1004,6 +1004,33 @@ def _parse_java(
                 )
             )
 
+    inherited_read_only = re.search(r"\bextends\s+ReadOnlyJpaRestController\b", text)
+    if inherited_read_only and class_prefix:
+        frameworks.append("spring-read-only-rest")
+        for suffix in ("", "/{param}"):
+            route_path = normalize_url(class_prefix + suffix)
+            routes.append(
+                Route(
+                    f"{repo_name}:GET:{route_path}", "GET", route_path, route_path,
+                    line_at(inherited_read_only.start()), None,
+                )
+            )
+
+    inherited_flow = re.search(r"\bextends\s+FlowController\b", text)
+    if inherited_flow and class_prefix:
+        frameworks.append("flowable-rest")
+        for method, suffix in (
+            ("GET", ""), ("GET", "/{param}"), ("POST", ""),
+            ("POST", "/submit"), ("POST", "/update"),
+        ):
+            route_path = normalize_url(class_prefix + suffix)
+            routes.append(
+                Route(
+                    f"{repo_name}:{method}:{route_path}", method, route_path, route_path,
+                    line_at(inherited_flow.start()), None,
+                )
+            )
+
     rest_methods = {
         "getForObject": "GET",
         "getForEntity": "GET",

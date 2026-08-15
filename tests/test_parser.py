@@ -432,6 +432,42 @@ public class CampaignController
         self.assertIn(("DELETE", "/api/campaignContent/{param}"), route_keys)
         self.assertIn("spring-jpa-rest", parsed.frameworks)
 
+    def test_java_inherited_read_only_and_flow_controllers_create_routes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            read_only = root / "DashboardController.java"
+            read_only.write_text(
+                '''@RestController
+@RequestMapping("${rest.pathPrefix:api}/dashboard")
+public class DashboardController extends ReadOnlyJpaRestController<Dashboard, Long> {}
+''',
+                encoding="utf-8",
+            )
+            flow = root / "ApprovalFlowController.java"
+            flow.write_text(
+                '''@RestController
+@RequestMapping("/approval/flow")
+public class ApprovalFlowController extends FlowController<Approval, QApproval> {}
+''',
+                encoding="utf-8",
+            )
+            parsed_read_only = parse_file(read_only, settings_for(root))
+            parsed_flow = parse_file(flow, settings_for(root))
+
+        read_only_routes = {(route.method, route.normalized_url) for route in parsed_read_only.routes}
+        self.assertEqual(
+            read_only_routes,
+            {("GET", "/api/dashboard"), ("GET", "/api/dashboard/{param}")},
+        )
+        flow_routes = {(route.method, route.normalized_url) for route in parsed_flow.routes}
+        self.assertIn(("GET", "/approval/flow"), flow_routes)
+        self.assertIn(("GET", "/approval/flow/{param}"), flow_routes)
+        self.assertIn(("POST", "/approval/flow"), flow_routes)
+        self.assertIn(("POST", "/approval/flow/submit"), flow_routes)
+        self.assertIn(("POST", "/approval/flow/update"), flow_routes)
+        self.assertIn("spring-read-only-rest", parsed_read_only.frameworks)
+        self.assertIn("flowable-rest", parsed_flow.frameworks)
+
     def test_java_vaadin_actions_calls_requests_and_systems(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
