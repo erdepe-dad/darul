@@ -258,7 +258,16 @@ class OperationManager:
 
 
 def operator_token() -> str:
-    return os.getenv("DARUL_OPERATOR_TOKEN", "").strip()
+    configured = os.getenv("DARUL_OPERATOR_TOKEN", "").strip()
+    if configured:
+        return configured
+    token_file = os.getenv("DARUL_OPERATOR_TOKEN_FILE", "").strip()
+    if not token_file:
+        return ""
+    try:
+        return Path(token_file).expanduser().read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise GraphEngineError(f"Unable to read DARUL_OPERATOR_TOKEN_FILE: {exc}") from exc
 
 
 def operator_origins() -> frozenset[str]:

@@ -222,6 +222,7 @@ __marimo__/
 !.env.example
 .graph_engine/*.env
 !.graph_engine/*.env.example
+.graph_engine/operator.token
 
 # Local agent prompts, design-review sessions, and generated review artifacts.
 .impeccable/

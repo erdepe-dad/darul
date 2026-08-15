@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from graph_engine.config import Settings
-from graph_engine.operator_api import OperatorService, RepositoryRegistry
+from graph_engine.operator_api import OperatorService, RepositoryRegistry, operator_token
 
 
 class FakeDB:
@@ -50,6 +51,16 @@ class OperatorServiceTests(unittest.TestCase):
                 registry.resolve("../secret")
             with self.assertRaisesRegex(ValueError, "not available"):
                 registry.resolve("sample-web")
+
+    def test_operator_token_can_be_loaded_from_protected_file(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            token_path = Path(directory) / "operator.token"
+            token_path.write_text("secret-token\n", encoding="utf-8")
+            with patch.dict(
+                "os.environ",
+                {"DARUL_OPERATOR_TOKEN": "", "DARUL_OPERATOR_TOKEN_FILE": str(token_path)},
+            ):
+                self.assertEqual(operator_token(), "secret-token")
 
 
 if __name__ == "__main__":

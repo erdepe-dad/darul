@@ -83,6 +83,7 @@ Darul reads process environment variables first, then `.env`, then `.graph_engin
 | `GRAPH_ENGINE_JSON_API_PREFIXES` | discovered from properties | Optional comma-separated CRNK/Katharsis server prefixes when configuration lives outside the repository |
 | `GRAPH_TUNNEL_HOSTNAME` | none | Cloudflare Access TCP hostname used by the helper script |
 | `DARUL_OPERATOR_TOKEN` | none | Bearer token required for build, sync, and service-mapping HTTP mutations |
+| `DARUL_OPERATOR_TOKEN_FILE` | none | Read the operator Bearer token from a protected file when the direct variable is unset |
 | `DARUL_OPERATOR_ORIGINS` | local ports 4173/5173 | Exact comma-separated browser origins allowed to call the operator API |
 | `DARUL_REPO_PARENT` | parent of Darul | Parent directory used to resolve bounded repository names for operator actions |
 | `DARUL_REPO_ROOTS` | none | Optional `name=/path` comma-separated overrides for operable repositories |
