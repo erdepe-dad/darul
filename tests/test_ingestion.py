@@ -145,6 +145,8 @@ public class ExampleTaskView {
         self.assertEqual(call_rows[0]["target_method"], "findTasks")
         stitch_query = next(query for query, _ in db.calls if "managed_by = 'callsite'" in query)
         self.assertIn("size(candidates) = 1", stitch_query)
+        self.assertIn("MATCH (owner:Class {qualified_name: call.target_type})", stitch_query)
+        self.assertIn("MATCH (owner:Class {name: call.target_type})", stitch_query)
 
     def test_java_imports_are_reconciled_from_persisted_file_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

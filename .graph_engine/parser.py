@@ -1678,11 +1678,20 @@ FOREACH (relationship IN old_relationships | DELETE relationship)
 WITH 1 AS ready
 MATCH (source)-[:DECLARES_CALL]->(call:CallSite)
 WHERE source:Function OR source:UIAction
-MATCH (file:CodeFile)-[:DEFINES]->(owner:Class)
+CALL {
+    WITH call
+    MATCH (owner:Class {qualified_name: call.target_type})
+    RETURN owner
+    UNION
+    WITH call
+    WITH call
+    WHERE NOT call.target_type CONTAINS '.'
+    MATCH (owner:Class {name: call.target_type})
+    RETURN owner
+}
+MATCH (file:CodeFile)-[:DEFINES]->(owner)
 MATCH (file)-[:DEFINES]->(target:Function)
 WHERE target.name = owner.name + '.' + call.target_method
-  AND (owner.qualified_name = call.target_type
-       OR (NOT call.target_type CONTAINS '.' AND owner.name = call.target_type))
 WITH source, call, collect(DISTINCT target) AS candidates
 WITH source, call, candidates,
      [candidate IN candidates WHERE candidate.repo_name = source.repo_name] AS local_candidates

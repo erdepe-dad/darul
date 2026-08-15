@@ -10,11 +10,15 @@ from graph_engine.db import SCHEMA_QUERIES, DatabaseConnectionError, GraphDB
 
 class DatabaseConfigurationTests(unittest.TestCase):
     def test_schema_indexes_cross_repository_class_lookups(self) -> None:
-        self.assertTrue(
-            any(
-                "Class" in query and "qualified_name" in query
-                for query in SCHEMA_QUERIES
-            )
+        class_indexes = {
+            property_name
+            for query in SCHEMA_QUERIES
+            for property_name in ("name", "qualified_name")
+            if "Class" in query and f"c.{property_name}" in query
+        }
+        self.assertEqual(
+            class_indexes,
+            {"name", "qualified_name"},
         )
 
     def test_missing_password_fails_before_driver_connection(self) -> None:
