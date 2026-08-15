@@ -107,6 +107,34 @@ def _lane(
     return "Systems"
 
 
+def _request_resolution_warning(
+    nodes: dict[str, dict[str, Any]], links: list[dict[str, Any]],
+) -> str | None:
+    endpoints = [
+        node for node in nodes.values()
+        if "APIEndpoint" in node["labels"]
+    ]
+    if not endpoints:
+        return None
+    resolved = {
+        link["source"] for link in links
+        if link["type"] == "TARGETS_ROUTE"
+    }
+    unresolved = [node for node in endpoints if node["id"] not in resolved]
+    if not unresolved:
+        return None
+    if len(unresolved) == len(endpoints):
+        return "No API request in this trace resolves to an ingested backend route."
+    labels = [node["label"] for node in unresolved[:3]]
+    detail = "; ".join(labels)
+    if len(unresolved) > len(labels):
+        detail += f"; +{len(unresolved) - len(labels)} more"
+    return (
+        f"{len(unresolved)} of {len(endpoints)} API requests do not resolve to an "
+        f"ingested backend route: {detail}."
+    )
+
+
 def trace_view(
     db: GraphDB,
     view: str,
@@ -233,10 +261,8 @@ def trace_view(
     ]
     lanes = [lane for lane in lanes if lane["nodes"]]
     warnings: list[str] = []
-    if any("APIEndpoint" in node["labels"] for node in useful_nodes.values()) and not any(
-        link["type"] == "TARGETS_ROUTE" for link in useful_links
-    ):
-        warnings.append("No frontend request in this trace resolves to an ingested backend route.")
+    if request_warning := _request_resolution_warning(useful_nodes, useful_links):
+        warnings.append(request_warning)
     if not any("WorkflowProcess" in node["labels"] for node in useful_nodes.values()):
         warnings.append("No statically linked Flowable process is reachable from this entry point.")
     if truncated:
