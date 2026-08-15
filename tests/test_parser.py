@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from graph_engine.config import Settings
 from graph_engine.parser import _mask_java_comments, parse_file, scan_repository
@@ -114,6 +115,34 @@ router.get('/api/users/:id', loadUser);
 
         self.assertEqual([item.path for item in result.files], ["main.go"])
         self.assertEqual(result.symbol_count, 1)
+
+    def test_parallel_scan_preserves_file_and_error_order(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for index in range(12):
+                (root / f"valid_{index:02}.py").write_text(
+                    f"def function_{index}():\n    return {index}\n",
+                    encoding="utf-8",
+                )
+            for name in ("broken_a.py", "broken_b.py"):
+                (root / name).write_text("def invalid(:\n", encoding="utf-8")
+            with mock.patch.dict("os.environ", {"GRAPH_ENGINE_WORKERS": "2"}):
+                result = scan_repository(settings_for(root))
+
+        self.assertEqual(
+            [item.path for item in result.files],
+            [f"valid_{index:02}.py" for index in range(12)],
+        )
+        self.assertEqual(result.skipped_files, 2)
+        self.assertIn("broken_a.py", result.errors[0])
+        self.assertIn("broken_b.py", result.errors[1])
+
+    def test_scan_rejects_invalid_worker_count(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with mock.patch.dict("os.environ", {"GRAPH_ENGINE_WORKERS": "0"}):
+                with self.assertRaisesRegex(ValueError, "positive integer"):
+                    scan_repository(settings_for(root))
 
     def test_go_parser_extracts_block_imports_and_route_methods(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

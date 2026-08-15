@@ -79,6 +79,7 @@ Darul reads process environment variables first, then `.env`, then `.graph_engin
 | `GRAPH_HTTP_BIND_ADDRESS` | `127.0.0.1` | Docker Neo4j Browser publishing address |
 | `CURRENT_REPO_NAME` | Git root name | Explicit repository graph namespace |
 | `GRAPH_ENGINE_EXCLUDES` | none | Additional comma-separated directory names to skip |
+| `GRAPH_ENGINE_WORKERS` | up to 4 CPUs | Parser process count; set to `1` for sequential scans |
 | `GRAPH_TUNNEL_HOSTNAME` | none | Cloudflare Access TCP hostname used by the helper script |
 
 For a manual setup, copy the safe template and replace both password placeholders with the same random value:

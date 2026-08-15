@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import ast
 import bisect
+import concurrent.futures
 import hashlib
+import itertools
 import os
 import re
 import time
@@ -20,6 +22,7 @@ from .stitcher import normalize_url
 
 SOURCE_EXTENSIONS = frozenset({".py", ".js", ".jsx", ".ts", ".tsx", ".go", ".java", ".bpmn"})
 MAX_FILE_BYTES = 2_000_000
+PARALLEL_SCAN_MIN_FILES = 64
 
 
 @dataclass(slots=True)
@@ -1515,18 +1518,56 @@ def iter_source_files(settings: Settings = SETTINGS) -> list[Path]:
     return sorted(files)
 
 
+def _parse_file_worker(path: Path, settings: Settings) -> tuple[ParsedFile | None, str | None]:
+    try:
+        return parse_file(path, settings), None
+    except (OSError, SyntaxError, UnicodeError, ValueError) as exc:
+        return None, f"{path}: {exc}"
+
+
+def _scan_worker_count(file_count: int) -> int:
+    configured = os.getenv("GRAPH_ENGINE_WORKERS", "").strip()
+    if configured:
+        try:
+            requested = int(configured)
+        except ValueError as exc:
+            raise ValueError("GRAPH_ENGINE_WORKERS must be a positive integer") from exc
+        if requested < 1:
+            raise ValueError("GRAPH_ENGINE_WORKERS must be a positive integer")
+        return max(1, min(requested, file_count))
+    if file_count < PARALLEL_SCAN_MIN_FILES:
+        return 1
+    return max(1, min(4, os.cpu_count() or 1, file_count))
+
+
 def scan_repository(settings: Settings = SETTINGS) -> ScanResult:
     started = time.monotonic()
+    paths = iter_source_files(settings)
     files: list[ParsedFile] = []
     errors: list[str] = []
-    skipped = 0
-    for path in iter_source_files(settings):
-        try:
-            files.append(parse_file(path, settings))
-        except (OSError, SyntaxError, UnicodeError, ValueError) as exc:
-            skipped += 1
-            errors.append(f"{path}: {exc}")
-    return ScanResult(files, time.monotonic() - started, skipped, errors)
+    worker_count = _scan_worker_count(len(paths))
+    if worker_count == 1:
+        results = map(_parse_file_worker, paths, itertools.repeat(settings))
+        for parsed, error in results:
+            if parsed is not None:
+                files.append(parsed)
+            if error is not None:
+                errors.append(error)
+    else:
+        chunksize = max(1, len(paths) // (worker_count * 32))
+        with concurrent.futures.ProcessPoolExecutor(max_workers=worker_count) as executor:
+            results = executor.map(
+                _parse_file_worker,
+                paths,
+                itertools.repeat(settings),
+                chunksize=chunksize,
+            )
+            for parsed, error in results:
+                if parsed is not None:
+                    files.append(parsed)
+                if error is not None:
+                    errors.append(error)
+    return ScanResult(files, time.monotonic() - started, len(errors), errors)
 
 
 CLEAR_REPOSITORY_STRUCTURE = """
