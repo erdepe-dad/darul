@@ -7,6 +7,7 @@ from graph_engine.config import Settings
 from graph_engine.tracer import (
     _request_resolution_warning,
     _workflow_resolution_warning,
+    render_mermaid,
     trace_view,
 )
 
@@ -112,6 +113,32 @@ class TracerTests(unittest.TestCase):
         self.assertIn("Vaadin UI", [lane["name"] for lane in trace["lanes"]])
         self.assertIn("Backend", [lane["name"] for lane in trace["lanes"]])
         self.assertIn("flowchart LR", trace["mermaid"])
+
+    def test_mermaid_preserves_action_effects_and_long_conditions(self) -> None:
+        condition = "status == 2202 or status == 2503 or status == 2304 or status == 2010"
+        trace = {
+            "nodes": [
+                {
+                    "id": "action",
+                    "label": "Select grid row\nEffects: detail.setEnabled(true); delete.setEnabled(false)",
+                    "labels": ["UIAction"],
+                },
+                {"id": "target", "label": "ExampleTaskService.cancel", "labels": ["Function"]},
+            ],
+            "links": [
+                {
+                    "source": "action", "target": "target", "type": "CALLS",
+                    "properties": {"condition": condition}, "alternative": True,
+                }
+            ],
+            "lanes": [{"name": "Vaadin UI", "nodes": ["action", "target"]}],
+        }
+
+        mermaid = render_mermaid(trace)
+
+        self.assertIn("detail.setEnabled(true)", mermaid)
+        self.assertIn("delete.setEnabled(false)", mermaid)
+        self.assertIn("status == 2010", mermaid)
 
 
 if __name__ == "__main__":

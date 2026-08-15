@@ -28,6 +28,7 @@ Class:         {repository}:{relative_path}::{class_name}
 Function:      {repository}:{relative_path}::{function_signature}
 CallSite:      {repository}:{relative_path}::call:{line}:{target_type}.{target_method}
 Page:          {repository}:{relative_path}
+UIAction:      {repository}:{relative_path}::action:{component}:{event}:{line}
 BackendRoute:  {repository}:{method}:{normalized_path}
 WorkflowStart: {repository}:{relative_path}::process-start:{process_key}:{line}
 Decision:      {repository}:{uuid}
@@ -44,6 +45,10 @@ Do not change ID generation without a migration plan. IDs are referenced by deci
 (Function|UIAction)-[:DECLARES_CALL]->(CallSite)
 (Function|UIAction)-[:CALLS]->(Function)
 (CodeFile)-[:CONTAINS]->(Page)
+(CodeFile)-[:CONTAINS]->(UIAction)
+(Page)-[:HAS_ACTION]->(UIAction)
+(Function)-[:DECLARES_ACTION]->(UIAction)
+(UIAction)-[:DECLARED_IN]->(Function)
 (Page)-[:MAKES_REQUEST]->(APIEndpoint)
 (APIEndpoint)-[:TARGETS_ROUTE]->(BackendRoute)
 (Repository)-[:CONTAINS]->(BackendRoute)
@@ -69,6 +74,8 @@ Do not change ID generation without a migration plan. IDs are referenced by deci
 
 The schema creates unique constraints for repositories, files, symbols, pages, endpoints, routes, decisions, and sessions.
 
+`UIAction.effects` stores bounded, deterministic component-state mutations such as enable, visibility, value, selection, and content changes found inside a listener. Component actions are retained even when their file is not itself a routable `Page`; `DECLARES_ACTION` allows a behavioral trace to enter those downstream listeners from the declaring function.
+
 ## Full build flow
 
 1. Resolve the active Git root and repository namespace.
@@ -79,6 +86,7 @@ The schema creates unique constraints for repositories, files, symbols, pages, e
 6. Batch-ingest files and children using globally scoped IDs.
 7. Reconcile persisted workflow starts with matching BPMN processes across all repositories.
 8. Normalize endpoint paths and create `TARGETS_ROUTE` relationships where method and path match.
+9. Apply persisted `ExternalSystem.path_prefix` mappings for requests whose runtime base URL is represented by a configuration key.
 
 The full build does not delete other repository roots.
 
@@ -91,6 +99,10 @@ The post-merge installer adds a marked block to `.git/hooks/post-merge`. Existin
 ## Parser strategy
 
 Python uses the standard-library `ast` module. Other languages use bounded structural regular expressions designed for speed and graceful degradation. The fallback parsers are not full compilers and may miss heavily generated syntax, macros, dynamic routing, unusual decorators, or calls assembled across multiple expressions.
+
+Java `@JsonApiResource` classes become backend routes only when the repository declares a CRNK or Katharsis server path prefix in a properties file. This prevents client-side JSON:API DTOs from being misclassified as servers. External configuration can supply the same evidence through `GRAPH_ENGINE_JSON_API_PREFIXES`.
+
+Runtime service keys are represented by `ExternalSystem` nodes. The `services set` command stores the observed base URL, derived path prefix, and optional target repository on that node. Stitching then joins the prefixed request path to backend routes and marks the relationship with `resolution = 'configured-prefix'`; changing or clearing a mapping removes stale managed links on the next stitch pass.
 
 Flowable BPMN uses the standard-library XML parser. Each process becomes a `WorkflowProcess`; tasks, events, and gateways become ordered `WorkflowStep` nodes. Runtime starts are persisted as `WorkflowStart` references, allowing `STARTS_PROCESS` links to be reconciled after the matching BPMN repository is scanned. Runtime starts, delegate expressions, listener classes, and called processes prefer matches in the source repository, then resolve a unique cross-repository match. Ambiguous cross-repository aliases and process keys remain unlinked instead of creating speculative edges.
 

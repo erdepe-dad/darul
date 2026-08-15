@@ -51,7 +51,7 @@ LIMIT $limit
 
 
 TRACE_RELATIONSHIPS = [
-    "CONTAINS", "DEFINES", "HAS_ACTION", "DECLARED_IN", "CALLS", "MAKES_REQUEST",
+    "CONTAINS", "DEFINES", "HAS_ACTION", "DECLARES_ACTION", "CALLS", "MAKES_REQUEST",
     "TARGETS_ROUTE", "HANDLED_BY", "STARTS_PROCESS", "HAS_STEP", "NEXT", "INVOKES",
     "TARGETS_SYSTEM", "PUBLISHES_TO", "CONSUMED_BY", "ROUTES_TO", "SAME_CHANNEL",
     "DECLARES_START", "RESOLVES_TO",
@@ -71,7 +71,9 @@ def _label(properties: dict[str, Any], labels: list[str]) -> str:
             "click": "Click", "itemclick": "Open", "selection": "Select",
             "valuechange": "Change", "attach": "Attach", "detach": "Detach",
         }.get(event, event.title())
-        return f"{verb} {component}".strip()
+        label = f"{verb} {component}".strip()
+        effects = [str(effect) for effect in properties.get("effects") or [] if effect]
+        return f"{label}\nEffects: {'; '.join(effects[:6])}" if effects else label
     if "APIEndpoint" in labels:
         return f"{properties.get('method', '?')} {properties.get('normalized_url', properties.get('url', ''))}"
     if "BackendRoute" in labels:
@@ -327,7 +329,8 @@ def render_mermaid(trace: dict[str, Any]) -> str:
         lines.append(f'  subgraph {lane_id}["{lane["name"]}"]')
         for node_id in lane["nodes"]:
             node = next(item for item in nodes if item["id"] == node_id)
-            label = node["label"].replace('"', "'").replace("\n", " ")[:90]
+            label_limit = 260 if "UIAction" in node["labels"] else 90
+            label = node["label"].replace('"', "'").replace("\n", " ")[:label_limit]
             lines.append(f'    {aliases[node_id]}["{label}"]')
         lines.append("  end")
     for link in links:
@@ -337,7 +340,7 @@ def render_mermaid(trace: dict[str, Any]) -> str:
             continue
         props = link.get("properties") or {}
         detail = props.get("condition") or props.get("name") or ("default" if props.get("is_default") else "")
-        label = str(detail or link["type"]).replace('"', "'").replace("\n", " ")[:100]
+        label = str(detail or link["type"]).replace('"', "'").replace("\n", " ")[:240]
         arrow = "-.->" if link.get("alternative") else "-->"
         lines.append(f'  {source} {arrow}|"{label}"| {target}')
     return "\n".join(lines)

@@ -44,6 +44,7 @@ def health():
 
         clear_query, _ = db.calls[0]
         self.assertNotIn("n:CodeFile", clear_query)
+        self.assertIn("n:ExternalSystem AND n.configured_at IS NULL", clear_query)
         prune_query, prune_parameters = db.calls[1]
         self.assertIn("MATCH (f:CodeFile", prune_query)
         self.assertEqual(prune_parameters["file_ids"], ["repo-a:service.py"])
@@ -156,6 +157,73 @@ public class ExampleTaskView {
             stitch_query,
         )
         self.assertNotIn("CALL {", stitch_query)
+
+    def test_component_actions_persist_without_a_page_node(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "TaskComponent.java"
+            source.write_text(
+                '''public class TaskComponent {
+    public void wire() {
+        button.addClickListener(event -> { button.setEnabled(false); });
+    }
+}
+''',
+                encoding="utf-8",
+            )
+            settings = Settings(root, "ui-repo", "bolt://unused", "neo4j", "x", None, 1.0, frozenset())
+            parsed = parse_file(source, settings)
+            db = FakeDB()
+
+            ingest_files(db, [parsed], settings)
+
+        action_query, parameters = next(
+            (query, parameters)
+            for query, parameters in db.calls
+            if "MERGE (a:UIAction" in query
+        )
+        self.assertIn("OPTIONAL MATCH (p:Page", action_query)
+        self.assertIn("MERGE (fn)-[:DECLARES_ACTION]->(a)", action_query)
+        self.assertEqual(parameters["rows"][0]["effects"], ["button.setEnabled(false)"])
+
+    def test_rest_template_variable_requests_persist_with_function_ownership(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "ExampleTaskService.java"
+            source.write_text(
+                '''import org.springframework.stereotype.Service;
+import org.springframework.web.client.RestTemplate;
+@Service
+public class ExampleTaskService {
+    RestTemplate restTemplate() { return null; }
+    public Task save(Task task) {
+        String url = baseUrl + "/api/tasks";
+        RestTemplate client = restTemplate();
+        return client.postForEntity(url, task, Task.class).getBody();
+    }
+}
+class Task {}
+''',
+                encoding="utf-8",
+            )
+            settings = Settings(root, "ui-repo", "bolt://unused", "neo4j", "x", None, 1.0, frozenset())
+            parsed = parse_file(source, settings)
+            db = FakeDB()
+
+            ingest_files(db, [parsed], settings)
+
+        request_query, parameters = next(
+            (query, parameters)
+            for query, parameters in db.calls
+            if "MERGE (a:APIEndpoint" in query
+        )
+        self.assertEqual(parameters["rows"][0]["method"], "POST")
+        self.assertEqual(parameters["rows"][0]["normalized_url"], "/api/tasks")
+        self.assertEqual(
+            parameters["rows"][0]["source_function_id"],
+            "ui-repo:ExampleTaskService.java::ExampleTaskService.save(Task)",
+        )
+        self.assertIn("MERGE (fn)-[:MAKES_REQUEST]->(a)", request_query)
 
     def test_java_imports_are_reconciled_from_persisted_file_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

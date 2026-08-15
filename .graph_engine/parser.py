@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import bisect
 import concurrent.futures
+import functools
 import hashlib
 import itertools
 import os
@@ -23,6 +24,10 @@ from .stitcher import normalize_url
 SOURCE_EXTENSIONS = frozenset({".py", ".js", ".jsx", ".ts", ".tsx", ".go", ".java", ".bpmn"})
 MAX_FILE_BYTES = 2_000_000
 PARALLEL_SCAN_MIN_FILES = 64
+JSON_API_PREFIX_RE = re.compile(
+    r"^\s*(?:crnk|katharsis)\.(?:pathPrefix|path-prefix)\s*=\s*([^#\r\n]+)",
+    re.MULTILINE | re.IGNORECASE,
+)
 
 
 @dataclass(slots=True)
@@ -92,6 +97,7 @@ class UIAction:
     event: str
     line: int
     handler_id: str
+    effects: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -172,6 +178,45 @@ class ScanResult:
 
 def _entity_id(repo_name: str, rel_path: str, name: str) -> str:
     return f"{repo_name}:{rel_path}::{name}"
+
+
+@functools.lru_cache(maxsize=64)
+def _discover_json_api_prefixes(
+    repo_root: str, excludes: tuple[str, ...], override: str,
+) -> tuple[str, ...]:
+    """Find server-side CRNK/Katharsis prefixes without treating client DTOs as routes."""
+    prefixes = {
+        normalize_url(item)
+        for item in override.split(",")
+        if item.strip()
+    }
+    excluded = set(excludes)
+    for directory, names, files in os.walk(repo_root):
+        names[:] = [name for name in names if name not in excluded]
+        for filename in files:
+            if not filename.endswith(".properties"):
+                continue
+            path = Path(directory) / filename
+            try:
+                if path.stat().st_size > 256_000:
+                    continue
+                text = path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            prefixes.update(
+                normalize_url(match.group(1).strip())
+                for match in JSON_API_PREFIX_RE.finditer(text)
+                if match.group(1).strip()
+            )
+    return tuple(sorted(prefixes))
+
+
+def _json_api_prefixes(settings: Settings) -> tuple[str, ...]:
+    return _discover_json_api_prefixes(
+        str(settings.repo_root),
+        tuple(sorted(settings.excludes)),
+        os.getenv("GRAPH_ENGINE_JSON_API_PREFIXES", "").strip(),
+    )
 
 
 def _literal_string(node: ast.AST | None) -> str | None:
@@ -389,6 +434,12 @@ JAVA_REST_TEMPLATE_RE = re.compile(
     r"\(\s*\"([^\"]+)\"",
     re.DOTALL,
 )
+JAVA_REST_TEMPLATE_VARIABLE_RE = re.compile(
+    r"\b([A-Za-z_$][\w$]*)\s*\."
+    r"(getForObject|getForEntity|postForObject|postForEntity|put|patchForObject|delete)\s*"
+    r"\(\s*([A-Za-z_$][\w$]*)\b",
+    re.DOTALL,
+)
 JAVA_REST_TEMPLATE_FACTORY_RE = re.compile(
     r"\brest(?:List)?Template\s*\(\s*\)\s*\.\s*"
     r"(getForObject|getForEntity|postForObject|postForEntity|put|patchForObject|delete)\s*"
@@ -411,6 +462,12 @@ JAVA_WORKFLOW_PATTERNS = (
 )
 JAVA_LISTENER_RE = re.compile(
     r"\b([A-Za-z_$][\w$]*)\s*\.\s*add(Click|Selection|ValueChange|ItemClick|Attach|Detach)Listener\s*\([^;]*?->\s*\{",
+    re.DOTALL,
+)
+JAVA_UI_EFFECT_RE = re.compile(
+    r"\b([A-Za-z_$][\w$]*)\s*\.\s*"
+    r"(setEnabled|setVisible|setReadOnly|setValue|setItems|setContent|clear|select|deselectAll|focus)"
+    r"\s*\((.*?)\)\s*;",
     re.DOTALL,
 )
 JAVA_QUALIFIED_CALL_RE = re.compile(
@@ -790,7 +847,7 @@ def _java_builder_path(text: str, offset: int) -> str:
 
 
 def _parse_java(
-    text: str, repo_name: str, rel_path: str
+    text: str, repo_name: str, rel_path: str, json_api_prefixes: tuple[str, ...] = ()
 ) -> tuple[
     list[str], list[Symbol], list[Symbol], list[APIRequest], list[Route], str | None,
     list[str], list[str], list[UIAction], list[FunctionCall], list[ProcessStart],
@@ -883,8 +940,15 @@ def _parse_java(
         closing = brace_pairs.get(opening)
         if closing is None:
             continue
-        condition = re.sub(r"\s+", " ", match.group(1)).strip()[:240]
+        condition = re.sub(r"\s+", " ", match.group(1)).strip()[:500]
         condition_regions.append((opening, closing, condition))
+        else_match = re.match(r"\s*else\s*\{", text[closing + 1:])
+        if else_match:
+            else_opening = closing + 1 + else_match.end() - 1
+            if else_closing := brace_pairs.get(else_opening):
+                condition_regions.append(
+                    (else_opening, else_closing, f"NOT ({condition})"[:500])
+                )
 
     def condition_at(offset: int, method_start: int) -> str:
         candidates = [item for item in condition_regions if method_start <= item[0] <= offset <= item[1]]
@@ -961,19 +1025,20 @@ def _parse_java(
 
     json_api_match = JAVA_JSON_API_RESOURCE_RE.search(text)
     if json_api_match:
-        resource_path = normalize_url(f"/api/{json_api_match.group(1)}")
         frameworks.append("crnk-jsonapi")
-        for method, suffix in (
-            ("GET", ""), ("POST", ""), ("GET", "/{param}"), ("PUT", "/{param}"),
-            ("PATCH", "/{param}"), ("DELETE", "/{param}"),
-        ):
-            route_path = normalize_url(resource_path + suffix)
-            routes.append(
-                Route(
-                    f"{repo_name}:{method}:{route_path}", method, route_path, route_path,
-                    line_at(json_api_match.start()), None,
+        for prefix in json_api_prefixes:
+            resource_path = normalize_url(f"{prefix}/{json_api_match.group(1)}")
+            for method, suffix in (
+                ("GET", ""), ("POST", ""), ("GET", "/{param}"), ("PUT", "/{param}"),
+                ("PATCH", "/{param}"), ("DELETE", "/{param}"),
+            ):
+                route_path = normalize_url(resource_path + suffix)
+                routes.append(
+                    Route(
+                        f"{repo_name}:{method}:{route_path}", method, route_path, route_path,
+                        line_at(json_api_match.start()), None,
+                    )
                 )
-            )
 
     inheritance_text = comment_free_text
     qualified_base = r"(?:[A-Za-z_$][\w$]*\.)*"
@@ -1061,6 +1126,15 @@ def _parse_java(
                 assignments.setdefault(assignment.group(1), []).append(
                     (assignment.start(), url, system)
                 )
+        for match in JAVA_REST_TEMPLATE_VARIABLE_RE.finditer(request_text):
+            receiver, operation, url_argument = match.groups()
+            if receiver not in rest_template_names:
+                continue
+            candidates = [item for item in assignments.get(url_argument, []) if item[0] < match.start()]
+            if candidates:
+                add_request(
+                    rest_methods[operation], candidates[-1][1], match.start(), candidates[-1][2]
+                )
         for match in JAVA_REST_TEMPLATE_FACTORY_RE.finditer(request_text):
             operation, url_argument = match.groups()
             if url_argument.startswith('"'):
@@ -1104,7 +1178,7 @@ def _parse_java(
     ui_actions: list[UIAction] = []
     action_regions: list[tuple[int, int, str]] = []
     for listener in JAVA_LISTENER_RE.finditer(text) if behavioral_file else ():
-        handler_id, _ = source_method(listener.start())
+        handler_id, method_start = source_method(listener.start())
         if not handler_id:
             continue
         component, event_name = listener.group(1), listener.group(2)
@@ -1114,10 +1188,20 @@ def _parse_java(
         )
         opening = listener.end() - 1
         closing = brace_pairs.get(opening, len(text))
+        effects: list[str] = []
+        action_body = _mask_java_comments(text[opening + 1:closing])
+        for effect in JAVA_UI_EFFECT_RE.finditer(action_body):
+            absolute_offset = opening + 1 + effect.start()
+            arguments = re.sub(r"\s+", " ", effect.group(3)).strip()
+            description = f"{effect.group(1)}.{effect.group(2)}({arguments})"
+            if condition := condition_at(absolute_offset, method_start):
+                description = f"if {condition}: {description}"
+            if description not in effects:
+                effects.append(description[:500])
         ui_actions.append(
             UIAction(
                 action_id, component.replace("_", " "), event_name.lower(),
-                line_at(listener.start()), handler_id,
+                line_at(listener.start()), handler_id, effects[:12],
             )
         )
         action_regions.append((opening, closing, action_id))
@@ -1466,7 +1550,9 @@ def parse_file(path: Path, settings: Settings = SETTINGS) -> ParsedFile:
             imports, classes, functions, requests, routes, route_path, frameworks,
             workflow_refs, ui_actions, function_calls, process_starts,
             message_uses, message_bindings,
-        ) = _parse_java(text, settings.repo_name, rel_path)
+        ) = _parse_java(
+            text, settings.repo_name, rel_path, _json_api_prefixes(settings)
+        )
     elif extension in {".bpmn", ".bpmn20.xml"}:
         workflow_processes, workflow_steps, workflow_flows = _parse_bpmn(raw, settings.repo_name, rel_path)
         imports, classes, functions, requests, routes = [], [], [], [], []
@@ -1574,7 +1660,7 @@ CLEAR_REPOSITORY_STRUCTURE = """
 MATCH (n {repo_name: $repo_name})
 WHERE n:Class OR n:Function OR n:Page OR n:APIEndpoint OR n:BackendRoute
    OR n:CallSite OR n:WorkflowProcess OR n:WorkflowStep OR n:WorkflowStart OR n:UIAction
-   OR n:ExternalSystem OR n:MessageChannel
+   OR (n:ExternalSystem AND n.configured_at IS NULL) OR n:MessageChannel
 DETACH DELETE n
 """
 
@@ -1630,7 +1716,10 @@ UPSERT_EXTERNAL_SYSTEMS = """
 UNWIND $rows AS row
 MATCH (a:APIEndpoint {id: row.request_id})
 MERGE (s:ExternalSystem {id: row.system_id})
-SET s.name = row.name, s.repo_name = $repo_name
+SET s.name = row.name, s.repo_name = $repo_name,
+    s.base_url = coalesce(s.base_url, ''),
+    s.path_prefix = coalesce(s.path_prefix, ''),
+    s.target_repo = coalesce(s.target_repo, '')
 MERGE (a)-[:TARGETS_SYSTEM]->(s)
 """
 
@@ -1674,15 +1763,19 @@ SET flow.name = row.name, flow.condition = row.condition, flow.is_default = row.
 
 UPSERT_UI_ACTIONS = """
 UNWIND $rows AS row
-MATCH (f:CodeFile {id: row.file_id}), (p:Page {id: row.file_id})
+MATCH (f:CodeFile {id: row.file_id})
+OPTIONAL MATCH (p:Page {id: row.file_id})
 MERGE (a:UIAction {id: row.id})
 SET a.name = row.name, a.event = row.event, a.line = row.line,
-    a.repo_name = $repo_name, a.source_file_id = row.file_id
+    a.effects = row.effects, a.repo_name = $repo_name, a.source_file_id = row.file_id
 MERGE (f)-[:CONTAINS]->(a)
-MERGE (p)-[:HAS_ACTION]->(a)
+FOREACH (_ IN CASE WHEN p IS NULL THEN [] ELSE [1] END |
+    MERGE (p)-[:HAS_ACTION]->(a)
+)
 WITH a, row
 MATCH (fn:Function {id: row.handler_id})
 MERGE (a)-[:DECLARED_IN]->(fn)
+MERGE (fn)-[:DECLARES_ACTION]->(a)
 """
 
 UPSERT_CALL_SITES = """

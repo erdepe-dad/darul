@@ -405,6 +405,47 @@ public class ConfiguredApiClient {
         self.assertIn(("GET", "/api/car", "ASSET_API_URL"), requests)
         self.assertIn(("GET", "/roleMapping", "BACKEND_API_URL"), requests)
 
+    def test_java_rest_template_variables_resolve_get_and_post_urls(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "ExampleTaskService.java"
+            source.write_text(
+                '''import org.springframework.stereotype.Service;
+import org.springframework.web.client.RestTemplate;
+@Service
+public class ExampleTaskService {
+    String baseUrl;
+    RestTemplate restTemplate() { return null; }
+    public Task getOne(String id) {
+        String url = baseUrl + "/api/tasks/" + id;
+        RestTemplate client = restTemplate();
+        return client.getForObject(url, Task.class);
+    }
+    public Task save(Task task) {
+        String url = baseUrl + "/api/tasks";
+        RestTemplate client = restTemplate();
+        return client.postForEntity(url, task, Task.class).getBody();
+    }
+}
+class Task {}
+''',
+                encoding="utf-8",
+            )
+            parsed = parse_file(source, settings_for(root))
+
+        requests = {
+            (request.method, request.normalized_url, request.source_function_id)
+            for request in parsed.requests
+        }
+        self.assertIn(
+            ("GET", "/api/tasks/{param}", "sample:ExampleTaskService.java::ExampleTaskService.getOne(String)"),
+            requests,
+        )
+        self.assertIn(
+            ("POST", "/api/tasks", "sample:ExampleTaskService.java::ExampleTaskService.save(Task)"),
+            requests,
+        )
+
     def test_java_vaadin_8_spring_view_and_exchange_variable(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -463,6 +504,9 @@ public class LegacyExampleView implements View {
     def test_java_json_api_resource_creates_crud_routes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            (root / "application.properties").write_text(
+                "crnk.pathPrefix=/japi\n", encoding="utf-8"
+            )
             source = root / "Question.java"
             source.write_text(
                 '''import io.crnk.core.resource.annotations.JsonApiResource;
@@ -474,10 +518,47 @@ public class Question {}
             parsed = parse_file(source, settings_for(root))
 
         route_keys = {(route.method, route.normalized_url) for route in parsed.routes}
-        self.assertIn(("GET", "/api/questions"), route_keys)
-        self.assertIn(("POST", "/api/questions"), route_keys)
-        self.assertIn(("DELETE", "/api/questions/{param}"), route_keys)
+        self.assertIn(("GET", "/japi/questions"), route_keys)
+        self.assertIn(("POST", "/japi/questions"), route_keys)
+        self.assertIn(("DELETE", "/japi/questions/{param}"), route_keys)
         self.assertIn("crnk-jsonapi", parsed.frameworks)
+
+    def test_java_json_api_client_dto_does_not_create_backend_routes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "Question.java"
+            source.write_text(
+                '''import io.crnk.core.resource.annotations.JsonApiResource;
+@JsonApiResource(type="questions")
+public class Question {}
+''',
+                encoding="utf-8",
+            )
+            parsed = parse_file(source, settings_for(root))
+
+        self.assertEqual(parsed.routes, [])
+        self.assertIn("crnk-jsonapi", parsed.frameworks)
+
+    def test_java_katharsis_uses_configured_resource_prefix(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "application.properties").write_text(
+                "katharsis.pathPrefix=/api/v2/\n", encoding="utf-8"
+            )
+            source = root / "Question.java"
+            source.write_text(
+                '''import io.katharsis.resource.annotations.JsonApiResource;
+@JsonApiResource(type="questions")
+public class Question {}
+''',
+                encoding="utf-8",
+            )
+            parsed = parse_file(source, settings_for(root))
+
+        self.assertIn(
+            ("GET", "/api/v2/questions"),
+            {(route.method, route.normalized_url) for route in parsed.routes},
+        )
 
     def test_java_inherited_jpa_rest_controller_creates_crud_routes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -601,6 +682,67 @@ class Service { void load() {} }
         self.assertEqual(parsed.function_calls[0].target_method, "load")
         self.assertEqual(parsed.requests[0].normalized_url, "/api/tasks/{param}")
         self.assertEqual(parsed.requests[0].source_function_id, "sample:ExampleTaskView.java::ExampleTaskView.request(String)")
+
+    def test_java_vaadin_actions_capture_component_state_effects(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "TaskComponent.java"
+            source.write_text(
+                '''@Component
+public class TaskComponent {
+    void wire() {
+        grid.addSelectionListener(event -> {
+            if (grid.asSingleSelect().getValue() != null) {
+                btDelete.setEnabled(true);
+                btDetail.setEnabled(true);
+            } else {
+                btDelete.setEnabled(false);
+                btDetail.setEnabled(false);
+            }
+        });
+    }
+}
+''',
+                encoding="utf-8",
+            )
+            parsed = parse_file(source, settings_for(root))
+
+        self.assertEqual(len(parsed.ui_actions), 1)
+        self.assertEqual(
+            parsed.ui_actions[0].effects,
+            [
+                "if grid.asSingleSelect().getValue() != null: btDelete.setEnabled(true)",
+                "if grid.asSingleSelect().getValue() != null: btDetail.setEnabled(true)",
+                "if NOT (grid.asSingleSelect().getValue() != null): btDelete.setEnabled(false)",
+                "if NOT (grid.asSingleSelect().getValue() != null): btDetail.setEnabled(false)",
+            ],
+        )
+
+    def test_java_calls_preserve_complete_multiline_conditions(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "TaskComponent.java"
+            source.write_text(
+                '''@Component
+public class TaskComponent {
+    ExampleTaskService service;
+    public void cancel(String status) {
+        if (status.equals("PENDING") || status.equals("READY") || status.equals("FAILED") ||
+                status.equals("CANCELLED") || status.equals("COMPLETE") || status.equals("RETRY")) {
+            service.cancel();
+        }
+    }
+}
+class ExampleTaskService { void cancel() {} }
+''',
+                encoding="utf-8",
+            )
+            parsed = parse_file(source, settings_for(root))
+
+        call = next(item for item in parsed.function_calls if item.target_method == "cancel")
+        self.assertIn('status.equals("PENDING")', call.condition)
+        self.assertIn('status.equals("RETRY")', call.condition)
+
 
     def test_bpmn_flow_preserves_condition_and_default(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

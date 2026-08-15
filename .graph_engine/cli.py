@@ -16,7 +16,13 @@ from .config import SETTINGS
 from .db import GraphDB, GraphEngineError
 from .hooks.event_logger import record_decision
 from .parser import build_graph, scan_repository
-from .stitcher import inspect_page, stitch_endpoints
+from .stitcher import (
+    clear_service,
+    configure_service,
+    inspect_page,
+    list_services,
+    stitch_endpoints,
+)
 from .sync import sync_changes
 from .tracer import trace_view
 
@@ -173,6 +179,37 @@ def command_visualize(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_service_list(args: argparse.Namespace) -> int:
+    with GraphDB() as db:
+        rows = list_services(db, args.repo or "")
+    _print_json(rows)
+    return 0
+
+
+def command_service_set(args: argparse.Namespace) -> int:
+    repo_name = args.repo or SETTINGS.repo_name
+    with GraphDB() as db:
+        service = configure_service(
+            db,
+            args.key,
+            args.base_url,
+            repo_name=repo_name,
+            target_repo=args.target_repo or "",
+        )
+        stitched = stitch_endpoints(db)
+    _print_json({"service": service, "stitched": stitched})
+    return 0
+
+
+def command_service_clear(args: argparse.Namespace) -> int:
+    repo_name = args.repo or SETTINGS.repo_name
+    with GraphDB() as db:
+        service = clear_service(db, args.key, repo_name=repo_name)
+        stitched = stitch_endpoints(db)
+    _print_json({"service": service, "stitched": stitched})
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="graph-engine", description=__doc__)
     parser.add_argument("--version", action="version", version="graph-engine 0.1.0")
@@ -216,6 +253,27 @@ def build_parser() -> argparse.ArgumentParser:
     visualize.add_argument("--port", type=int, default=38533)
     visualize.add_argument("--open", action="store_true", help="Open the default browser")
     visualize.set_defaults(handler=command_visualize)
+
+    services = subparsers.add_parser(
+        "services", help="Manage runtime service base URLs used for endpoint stitching"
+    )
+    service_commands = services.add_subparsers(dest="service_command", required=True)
+
+    service_list = service_commands.add_parser("list", help="List discovered service keys")
+    service_list.add_argument("--repo", help="Limit results to one repository")
+    service_list.set_defaults(handler=command_service_list)
+
+    service_set = service_commands.add_parser("set", help="Configure a service base URL")
+    service_set.add_argument("--key", required=True, help="Runtime key such as BACKEND_API_URL")
+    service_set.add_argument("--base-url", required=True)
+    service_set.add_argument("--repo", help="Source repository; defaults to the active repository")
+    service_set.add_argument("--target-repo", help="Restrict matches to one backend repository")
+    service_set.set_defaults(handler=command_service_set)
+
+    service_clear = service_commands.add_parser("clear", help="Remove a service URL mapping")
+    service_clear.add_argument("--key", required=True)
+    service_clear.add_argument("--repo", help="Source repository; defaults to the active repository")
+    service_clear.set_defaults(handler=command_service_clear)
     return parser
 
 

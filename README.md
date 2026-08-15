@@ -80,6 +80,7 @@ Darul reads process environment variables first, then `.env`, then `.graph_engin
 | `CURRENT_REPO_NAME` | Git root name | Explicit repository graph namespace |
 | `GRAPH_ENGINE_EXCLUDES` | none | Additional comma-separated directory names to skip |
 | `GRAPH_ENGINE_WORKERS` | up to 4 CPUs | Parser process count; set to `1` for sequential scans |
+| `GRAPH_ENGINE_JSON_API_PREFIXES` | discovered from properties | Optional comma-separated CRNK/Katharsis server prefixes when configuration lives outside the repository |
 | `GRAPH_TUNNEL_HOSTNAME` | none | Cloudflare Access TCP hostname used by the helper script |
 
 For a manual setup, copy the safe template and replace both password placeholders with the same random value:
@@ -114,6 +115,10 @@ scripts/rotate-neo4j-password.sh
 .venv/bin/python3 -m graph_engine.cli inspect --page src/pages/checkout.tsx
 
 # Trace a Vaadin view or Java entry point through calls, HTTP, messaging, and Flowable.
+
+# Persist runtime service URLs used to resolve configuration-key-based requests.
+.venv/bin/python3 -m graph_engine.cli services set \
+  --base-url http://127.0.0.1:10000/api --target-repo admin-rest
 
 # Record an architectural decision and optionally supersede an earlier decision.
 .venv/bin/python3 -m graph_engine.cli decision \
@@ -233,6 +238,8 @@ See [docs/hooks.md](docs/hooks.md) for example lifecycle-hook configuration and 
 ## Architecture
 
 The implementation is split into configuration, Bolt access, parsers, ingestion, endpoint stitching, Git synchronization, hooks, and visualization modules. See [docs/architecture.md](docs/architecture.md) for the schema, data flow, extension points, and current parser limitations.
+
+The reproducible [LLM context benchmark](docs/benchmark.md) records the baseline token, runtime, tool-call, and answer-quality comparison between Darul retrieval and conventional source inspection.
 
 ## Development
 
