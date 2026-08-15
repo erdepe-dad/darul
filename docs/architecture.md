@@ -84,7 +84,7 @@ The full build does not delete other repository roots.
 
 ## Incremental synchronization
 
-`sync` reads a Git name-status diff. Deleted and renamed-away files have their owned structural subtree removed. Added, modified, and renamed-to files are reparsed individually and replaced. Call sites and workflow references are persisted during each file update, then graph-wide reconciliation and endpoint stitching run once after all changed subtrees are written.
+`sync` reads a Git name-status diff. Deleted and renamed-away files have their owned structural subtree removed. Added, modified, and renamed-to files are reparsed individually and replaced. Imports, call sites, and workflow references are persisted during each file update, then graph-wide reconciliation and endpoint stitching run once after all changed subtrees are written. Java imports prefer a class in the source repository, then a unique cross-repository class with the exact qualified name.
 
 The post-merge installer adds a marked block to `.git/hooks/post-merge`. Existing hook content is preserved, and repeated installation replaces only Darul's marked block.
 

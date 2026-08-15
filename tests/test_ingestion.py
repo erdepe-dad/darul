@@ -146,6 +146,27 @@ public class ExampleTaskView {
         stitch_query = next(query for query, _ in db.calls if "managed_by = 'callsite'" in query)
         self.assertIn("size(candidates) = 1", stitch_query)
 
+    def test_java_imports_are_reconciled_from_persisted_file_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "ExampleTaskView.java"
+            source.write_text(
+                '''import sample.service.ExampleTaskService;
+public class ExampleTaskView {}
+''',
+                encoding="utf-8",
+            )
+            settings = Settings(root, "ui-repo", "bolt://unused", "neo4j", "x", None, 1.0, frozenset())
+            parsed = parse_file(source, settings)
+            db = FakeDB()
+
+            ingest_files(db, [parsed], settings)
+
+        import_query = next(query for query, _ in db.calls if "old:IMPORTS" in query)
+        self.assertIn("UNWIND file.imports AS imported", import_query)
+        self.assertIn("candidate.repo_name = file.repo_name", import_query)
+        self.assertIn("size(candidates) = 1", import_query)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1809,14 +1809,29 @@ UNWIND selected AS p
 MERGE (s)-[:CALLS]->(p)
 """
 
-UPSERT_JAVA_IMPORTS = """
-UNWIND $rows AS row
-MATCH (f:CodeFile {id: row.file_id}), (c:Class {id: row.class_id})
-MERGE (f)-[:IMPORTS]->(c)
+STITCH_JAVA_IMPORTS = """
+OPTIONAL MATCH (:CodeFile)-[old:IMPORTS]->(:Class)
+WITH collect(old) AS old_relationships
+FOREACH (relationship IN old_relationships | DELETE relationship)
+WITH 1 AS ready
+MATCH (file:CodeFile {extension: '.java'})
+UNWIND file.imports AS imported
+MATCH (candidate:Class {qualified_name: imported})
+WITH file, imported, collect(DISTINCT candidate) AS candidates
+WITH file, candidates,
+     [candidate IN candidates WHERE candidate.repo_name = file.repo_name] AS local_candidates
+WITH file, CASE
+    WHEN size(local_candidates) > 0 THEN local_candidates
+    WHEN size(candidates) = 1 THEN candidates
+    ELSE []
+END AS selected
+UNWIND selected AS target
+MERGE (file)-[:IMPORTS]->(target)
 """
 
 
 def reconcile_structural_links(db: GraphDB) -> None:
+    db.execute_write(STITCH_JAVA_IMPORTS)
     db.execute_write(STITCH_FUNCTION_CALLS)
     db.execute_write(STITCH_WORKFLOW_STARTS)
     db.execute_write(STITCH_MESSAGE_CHANNELS)
@@ -1951,20 +1966,6 @@ def ingest_files(
             db.execute_write(UPSERT_MESSAGE_BINDINGS, rows=binding_rows)
     if reconcile:
         reconcile_structural_links(db)
-    classes_by_name = {
-        symbol.qualified_name: symbol.id
-        for item in files
-        for symbol in item.classes
-        if symbol.qualified_name
-    }
-    import_rows = [
-        {"file_id": item.id, "class_id": classes_by_name[imported]}
-        for item in files
-        for imported in item.imports
-        if imported in classes_by_name
-    ]
-    if import_rows:
-        db.execute_write(UPSERT_JAVA_IMPORTS, rows=import_rows)
 
 
 def build_graph(db: GraphDB, settings: Settings = SETTINGS) -> ScanResult:

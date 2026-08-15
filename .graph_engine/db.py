@@ -28,6 +28,7 @@ SCHEMA_QUERIES = (
     "CREATE CONSTRAINT session_id IF NOT EXISTS FOR (s:Session) REQUIRE s.id IS UNIQUE",
     "CREATE INDEX api_endpoint_lookup IF NOT EXISTS FOR (a:APIEndpoint) ON (a.normalized_url, a.method)",
     "CREATE INDEX backend_route_lookup IF NOT EXISTS FOR (b:BackendRoute) ON (b.normalized_url, b.method)",
+    "CREATE INDEX class_qualified_name_lookup IF NOT EXISTS FOR (c:Class) ON (c.qualified_name)",
     "CREATE INDEX message_channel_lookup IF NOT EXISTS FOR (m:MessageChannel) ON (m.broker, m.channel)",
 )
 

@@ -54,6 +54,10 @@ class SyncTests(unittest.TestCase):
             sum("managed_by = 'callsite'" in query for query, _ in db.calls),
             1,
         )
+        self.assertEqual(
+            sum("old:IMPORTS" in query for query, _ in db.calls),
+            1,
+        )
 
     def test_sync_skips_excluded_directories_and_removes_stale_nodes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
