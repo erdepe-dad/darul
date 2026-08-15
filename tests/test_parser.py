@@ -167,6 +167,237 @@ public class UsersView implements JavaDelegate {
         self.assertIn("user-onboarding", parsed.workflow_refs)
         self.assertIn("delegate:UsersView", parsed.workflow_refs)
 
+    def test_java_resolves_flow_service_process_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "ExampleWorkflow.java"
+            source.write_text(
+                '''import org.flowable.engine.RuntimeService;
+public class ExampleWorkflow {
+    private static final String PROC_DEF_KEY = "example_process";
+    private String processDefinitionKey = "fallback_process";
+
+    protected String getProcessDefinitionKey() {
+        return PROC_DEF_KEY;
+    }
+
+    public void start(RuntimeService runtimeService, FlowService flowService) {
+        if (runtimeService != null) {
+            flowService.startProcess(getProcessDefinitionKey(), new Object(), null);
+        }
+        runtimeService.startProcessInstanceByKeyAndTenantId(processDefinitionKey, "1", null, "tenant");
+        flowService.startProcess("literal_process", new Object(), null);
+    }
+}
+''',
+                encoding="utf-8",
+            )
+            parsed = parse_file(source, settings_for(root))
+
+        self.assertEqual(
+            {start.process_key for start in parsed.process_starts},
+            {"example_process", "fallback_process", "literal_process"},
+        )
+        self.assertNotIn("ExampleWorkflow.if", {function.name for function in parsed.functions})
+
+    def test_java_extracts_message_publishers_consumers_and_rabbit_bindings(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "MessagingService.java"
+            source.write_text(
+                '''import org.springframework.amqp.rabbit.annotation.RabbitListener;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.kafka.annotation.KafkaListener;
+import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.stereotype.Service;
+
+@Service
+public class MessagingService {
+    @Value("${app.rabbit.queue:worker.queue}")
+    private String workerQueue;
+    @Value("${app.rabbit.routing:worker.save}")
+    private String workerRoutingKey;
+    private RabbitTemplate rabbitTemplate;
+    private KafkaTemplate<String, String> kafkaTemplate;
+
+    public void publish() {
+        rabbitTemplate.convertAndSend("worker.exchange", workerRoutingKey, "payload");
+        kafkaTemplate.send("audit.events", "payload");
+    }
+
+    @RabbitListener(queues = "${app.rabbit.queue:worker.queue}")
+    public void consumeRabbit(String payload) {}
+
+    @KafkaListener(topics = "audit.events")
+    public void consumeKafka(String payload) {}
+
+    public Object binding() {
+        return BindingBuilder.bind(workerQueue()).to(workerExchange()).with(workerRoutingKey);
+    }
+}
+''',
+                encoding="utf-8",
+            )
+            parsed = parse_file(source, settings_for(root))
+
+        uses = {(use.direction, use.broker, use.channel) for use in parsed.message_uses}
+        self.assertIn(("publish", "rabbitmq", "worker.save"), uses)
+        self.assertIn(("consume", "rabbitmq", "worker.queue"), uses)
+        self.assertIn(("publish", "kafka", "audit.events"), uses)
+        self.assertIn(("consume", "kafka", "audit.events"), uses)
+        self.assertEqual(
+            [(binding.source_channel, binding.target_channel) for binding in parsed.message_bindings],
+            [("worker.save", "worker.queue")],
+        )
+
+    def test_java_map_put_is_not_an_http_request(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "Metadata.java"
+            source.write_text(
+                '''import java.util.Map;
+public class Metadata {
+    public void update(Map<String, String> values) {
+        values.put("title", "Safety report");
+    }
+}
+''',
+                encoding="utf-8",
+            )
+            parsed = parse_file(source, settings_for(root))
+
+        self.assertEqual(parsed.requests, [])
+
+    def test_java_vaadin_8_spring_view_and_exchange_variable(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "LegacyExampleView.java"
+            source.write_text(
+                '''import com.vaadin.navigator.View;
+import com.vaadin.spring.annotation.SpringView;
+import org.springframework.http.HttpMethod;
+import org.springframework.web.client.RestTemplate;
+@SpringView(name = LegacyExampleView.VIEW_NAME)
+public class LegacyExampleView implements View {
+    public static final String VIEW_NAME = "example_form";
+    public void load(String id) {
+        String url = baseUrl + "/api/resources/" + id;
+        RestTemplate client = new RestTemplate();
+        client.exchange(url, HttpMethod.GET, null, String.class);
+    }
+}
+''',
+                encoding="utf-8",
+            )
+            parsed = parse_file(source, settings_for(root))
+
+        self.assertEqual(parsed.route_path, "/example_form")
+        self.assertEqual(len(parsed.requests), 1)
+        self.assertEqual(parsed.requests[0].method, "GET")
+        self.assertEqual(parsed.requests[0].normalized_url, "/api/resources/{param}")
+
+    def test_bpmn_extracts_process_steps_flow_and_bindings(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "approval.bpmn20.xml"
+            source.write_text(
+                '''<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:flowable="http://flowable.org/bpmn">
+  <process id="example_approval" name="Example Approval">
+    <startEvent id="start" />
+    <serviceTask id="notify" name="Notify" flowable:delegateExpression="${notificationDelegate}" />
+    <userTask id="approve" name="Approve" />
+    <sequenceFlow id="to_notify" sourceRef="start" targetRef="notify" />
+    <sequenceFlow id="to_approve" sourceRef="notify" targetRef="approve" />
+  </process>
+</definitions>
+''',
+                encoding="utf-8",
+            )
+            parsed = parse_file(source, settings_for(root))
+
+        self.assertEqual(parsed.extension, ".bpmn20.xml")
+        self.assertEqual(parsed.workflow_processes[0].process_key, "example_approval")
+        self.assertEqual(len(parsed.workflow_steps), 3)
+        self.assertEqual(parsed.workflow_steps[1].bindings, ["notificationDelegate"])
+        self.assertEqual(len(parsed.workflow_flows), 2)
+
+    def test_java_json_api_resource_creates_crud_routes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "Question.java"
+            source.write_text(
+                '''import io.crnk.core.resource.annotations.JsonApiResource;
+@JsonApiResource(type="questions")
+public class Question {}
+''',
+                encoding="utf-8",
+            )
+            parsed = parse_file(source, settings_for(root))
+
+        route_keys = {(route.method, route.normalized_url) for route in parsed.routes}
+        self.assertIn(("GET", "/api/questions"), route_keys)
+        self.assertIn(("POST", "/api/questions"), route_keys)
+        self.assertIn(("DELETE", "/api/questions/{param}"), route_keys)
+        self.assertIn("crnk-jsonapi", parsed.frameworks)
+
+    def test_java_vaadin_actions_calls_requests_and_systems(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "ExampleTaskView.java"
+            source.write_text(
+                '''package sample;
+import com.vaadin.spring.annotation.SpringView;
+import org.springframework.web.client.RestTemplate;
+@SpringView(name="tasks")
+public class ExampleTaskView {
+    String KEY = "TASK_API";
+    String baseUrl;
+    Service service;
+    void wire() {
+        button.addClickListener(event -> { service.load(); });
+    }
+    void request(String id) {
+        String url = baseUrl + "/api/tasks/" + id;
+        restTemplate().getForEntity(url, String.class);
+    }
+    RestTemplate restTemplate() { return null; }
+}
+class Service { void load() {} }
+''',
+                encoding="utf-8",
+            )
+            parsed = parse_file(source, settings_for(root))
+
+        self.assertEqual(parsed.ui_actions[0].event, "click")
+        self.assertEqual(parsed.function_calls[0].target_method, "load")
+        self.assertEqual(parsed.requests[0].normalized_url, "/api/tasks/{param}")
+        self.assertEqual(parsed.requests[0].source_function_id, "sample:ExampleTaskView.java::ExampleTaskView.request(String)")
+
+    def test_bpmn_flow_preserves_condition_and_default(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "decision.bpmn20.xml"
+            source.write_text(
+                '''<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL">
+  <process id="approval">
+    <exclusiveGateway id="decision" default="rejected" />
+    <userTask id="approved" /><userTask id="revise" />
+    <sequenceFlow id="accepted" sourceRef="decision" targetRef="approved">
+      <conditionExpression>${approved == true}</conditionExpression>
+    </sequenceFlow>
+    <sequenceFlow id="rejected" sourceRef="decision" targetRef="revise" />
+  </process>
+</definitions>''',
+                encoding="utf-8",
+            )
+            parsed = parse_file(source, settings_for(root))
+
+        self.assertEqual(parsed.workflow_flows[0].condition, "${approved == true}")
+        self.assertTrue(parsed.workflow_flows[1].is_default)
+
 
 if __name__ == "__main__":
     unittest.main()

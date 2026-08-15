@@ -8,8 +8,9 @@ Darul converts repository structure and engineering history into a shared Neo4j 
 | --- | --- |
 | `.graph_engine/config.py` | Repository identity, environment loading, connection settings, and excluded directories |
 | `.graph_engine/db.py` | Neo4j driver lifecycle, schema constraints, read/write wrappers, and batched writes |
-| `.graph_engine/parser.py` | Python AST parsing and zero-token fallback parsers for JavaScript, TypeScript, Go, and Java |
+| `.graph_engine/parser.py` | Python AST parsing and zero-token fallback parsers for JavaScript, TypeScript, Go, Java, Vaadin, and Flowable BPMN |
 | `.graph_engine/stitcher.py` | URL normalization, frontend-to-backend route stitching, and page inspection |
+| `.graph_engine/tracer.py` | Bounded view/service traversal and Mermaid rendering across synchronous and asynchronous boundaries |
 | `.graph_engine/sync.py` | Incremental add/modify/delete/rename synchronization from a Git diff |
 | `.graph_engine/hooks/event_logger.py` | Session-event storage and architectural-decision lineage |
 | `.graph_engine/hooks/context_inject.py` | Active-decision and structural-hotspot retrieval for prompt context |
@@ -43,6 +44,15 @@ Do not change ID generation without a migration plan. IDs are referenced by deci
 (APIEndpoint)-[:TARGETS_ROUTE]->(BackendRoute)
 (Repository)-[:CONTAINS]->(BackendRoute)
 (BackendRoute)-[:HANDLED_BY]->(Function)
+(CodeFile)-[:IMPORTS]->(Class)
+(CodeFile)-[:CONTAINS]->(WorkflowProcess)
+(WorkflowProcess)-[:HAS_STEP]->(WorkflowStep)
+(WorkflowStep)-[:NEXT]->(WorkflowStep)
+(WorkflowStep)-[:INVOKES]->(Class)
+(WorkflowStep)-[:CALLS]->(WorkflowProcess)
+(Function)-[:PUBLISHES_TO]->(MessageChannel)
+(MessageChannel)-[:ROUTES_TO|SAME_CHANNEL]->(MessageChannel)
+(MessageChannel)-[:CONSUMED_BY]->(Function)
 (Repository)-[:HAS_SESSION]->(Session)
 (Session)-[:RECORDED]->(SessionEvent)
 (Session)-[:MADE_DECISION]->(Decision)
@@ -56,7 +66,7 @@ The schema creates unique constraints for repositories, files, symbols, pages, e
 
 1. Resolve the active Git root and repository namespace.
 2. Walk supported source files while excluding generated and dependency directories.
-3. Parse files locally into imports, symbols, requests, routes, framework metadata, and workflow references.
+3. Parse files locally into imports, symbols, requests, routes, message channels, framework metadata, and workflow references.
 4. Ensure graph constraints exist.
 5. Replace structural nodes owned by the active repository.
 6. Batch-ingest files and children using globally scoped IDs.
@@ -74,6 +84,8 @@ The post-merge installer adds a marked block to `.git/hooks/post-merge`. Existin
 
 Python uses the standard-library `ast` module. Other languages use bounded structural regular expressions designed for speed and graceful degradation. The fallback parsers are not full compilers and may miss heavily generated syntax, macros, dynamic routing, unusual decorators, or calls assembled across multiple expressions.
 
+Flowable BPMN uses the standard-library XML parser. Each process becomes a `WorkflowProcess`; tasks, events, and gateways become ordered `WorkflowStep` nodes. Delegate expressions and fully qualified listener classes resolve to Java `Class` nodes when a matching Spring bean alias or class name exists.
+
 When extending a parser:
 
 1. Preserve globally scoped IDs.
@@ -90,6 +102,7 @@ The Python server owns the Neo4j connection. The browser can request metadata, a
 GET /api/health
 GET /api/meta
 GET /api/graph?repository=...&labels=...&relationships=...&focus=...&depth=2
+GET /api/trace?repository=...&view=...&path_limit=1200
 GET /api/node/{element_id}
 ```
 

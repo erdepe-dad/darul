@@ -24,9 +24,10 @@ The repository includes a read-only, responsive graph atlas for human exploratio
 | JavaScript / TypeScript | Imports, functions, classes, `fetch`, Axios, Express-style routes |
 | Go | Imports, functions, and common HTTP router methods |
 | Java | Imports, classes, interfaces, records, enums, methods, and overload-aware IDs |
-| Spring Boot | Controller mappings, Feign mappings, RestTemplate calls, and WebClient calls |
-| Vaadin | `@Route` pages |
-| Flowable | Process keys, job-worker types, runtime starts, and `JavaDelegate` implementations |
+| Spring Boot | Controller mappings, Feign mappings, RestTemplate/WebClient calls, and CRNK JSON:API resources |
+| Vaadin | Flow `@Route` pages and Vaadin 8 `@SpringView` pages |
+| Flowable | BPMN processes, workflow steps, sequence flows, call activities, delegate bindings, runtime starts, and `JavaDelegate` implementations |
+| Messaging | Kafka, RabbitMQ, Redis, JMS, and Spring Cloud Stream publishers/listeners; RabbitMQ routing-key-to-queue bindings |
 
 Neo4j 5.20 or newer is the supported database. Other Bolt-compatible graph databases may require schema-query adaptations.
 
@@ -111,6 +112,8 @@ scripts/rotate-neo4j-password.sh
 # Inspect the end-to-end neighborhood for a page or component.
 .venv/bin/python3 -m graph_engine.cli inspect --page src/pages/checkout.tsx
 
+# Trace a Vaadin view or Java entry point through calls, HTTP, messaging, and Flowable.
+
 # Record an architectural decision and optionally supersede an earlier decision.
 .venv/bin/python3 -m graph_engine.cli decision \
   --title "Use Redis for sessions" \
@@ -156,6 +159,8 @@ The Folded Neighborhood atlas supports:
 - Repository, node-type, and relationship filtering
 - Search and configurable graph density
 - Directional relationships and selected-edge labels
+- Workflow process lanes with task ordering, called processes, and resolved Java delegates
+- View-centric evidence sheets spanning UI actions, Java calls, HTTP routes, message channels, workers, Flowable branches, and external systems
 - Folded-lane and free-force layouts
 - Two-hop neighborhood folding with preserved navigation history
 - Node properties and immediate-neighbor inspection
@@ -166,6 +171,12 @@ The Folded Neighborhood atlas supports:
 Database credentials remain in the Python process. The browser receives only read-only JSON graph results.
 
 Binding the server to `0.0.0.0` exposes repository metadata to the network without application-level authentication. Use localhost by default and put Cloudflare Access, a trusted reverse proxy, or an equivalent authentication layer in front of remote deployments.
+
+### Connecting Flowable and worker services
+
+Darul creates a Flowable path only when source evidence joins all three parts: a Java method starts a process key, an ingested BPMN `<process id>` has the same key, and BPMN delegate or expression bindings resolve to Java classes. Build every repository that owns those parts into the same Neo4j database. If an HTTP call targets a separately deployed service, scan that service too; Darul does not invent a process link across an unresolved external endpoint.
+
+Asynchronous boundaries use `MessageChannel` nodes instead of HTTP routes. A producer method connects with `PUBLISHES_TO`; RabbitMQ bindings use `ROUTES_TO`; matching channels across repositories use `SAME_CHANNEL`; and a listener connects to its worker method with `CONSUMED_BY`. Supported static patterns include `KafkaTemplate`, `@KafkaListener`, `RabbitTemplate`, `@RabbitListener`, Redis/JMS templates and listeners, and Spring Cloud Stream listeners. Dynamic topic names without a literal, constant, or Spring-property default remain unresolved and are shown as an evidence gap.
 
 ## Docker persistence and restart behavior
 

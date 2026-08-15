@@ -57,6 +57,7 @@ def git_changes(settings: Settings = SETTINGS, base: str = "ORIG_HEAD", head: st
 DELETE_FILE_QUERY = """
 MATCH (n {repo_name: $repo_name, source_file_id: $file_id})
 WHERE n:Class OR n:Function OR n:Page OR n:APIEndpoint OR n:BackendRoute
+   OR n:WorkflowProcess OR n:WorkflowStep OR n:UIAction OR n:ExternalSystem OR n:MessageChannel
 DETACH DELETE n
 WITH count(*) AS ignored
 MATCH (f:CodeFile {id: $file_id})
@@ -87,7 +88,7 @@ def sync_changes(
             delete_file(db, change.old_path, settings)
             result.deleted.append(change.old_path)
         extension = Path(change.path).suffix.lower()
-        if extension not in SOURCE_EXTENSIONS:
+        if extension not in SOURCE_EXTENSIONS and not change.path.lower().endswith(".bpmn20.xml"):
             result.skipped.append(change.path)
             continue
         if change.status == "D":

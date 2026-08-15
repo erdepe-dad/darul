@@ -18,6 +18,7 @@ from .hooks.event_logger import record_decision
 from .parser import build_graph, scan_repository
 from .stitcher import inspect_page, stitch_endpoints
 from .sync import sync_changes
+from .tracer import trace_view
 
 
 def _json_default(value: Any) -> str:
@@ -37,6 +38,8 @@ def command_build(args: argparse.Namespace) -> int:
                 "root": str(SETTINGS.repo_root),
                 "files": len(result.files),
                 "symbols": result.symbol_count,
+                "workflow_processes": sum(len(item.workflow_processes) for item in result.files),
+                "workflow_steps": sum(len(item.workflow_steps) for item in result.files),
                 "skipped": result.skipped_files,
                 "errors": result.errors,
                 "duration_seconds": round(result.duration_seconds, 4),
@@ -54,6 +57,8 @@ def command_build(args: argparse.Namespace) -> int:
             "symbols": result.symbol_count,
             "requests": sum(len(item.requests) for item in result.files),
             "routes": sum(len(item.routes) for item in result.files),
+            "workflow_processes": sum(len(item.workflow_processes) for item in result.files),
+            "workflow_steps": sum(len(item.workflow_steps) for item in result.files),
             "stitched": stitched,
             "skipped": result.skipped_files,
             "errors": result.errors,
@@ -76,6 +81,16 @@ def command_inspect(args: argparse.Namespace) -> int:
         result = inspect_page(db, args.page)
     _print_json(result)
     return 0
+
+
+def command_trace(args: argparse.Namespace) -> int:
+    with GraphDB() as db:
+        result = trace_view(db, args.view, path_limit=args.path_limit)
+    if args.format == "mermaid":
+        print(result.get("mermaid", ""))
+    else:
+        _print_json(result)
+    return 0 if result.get("found") else 1
 
 
 def command_install_hooks(args: argparse.Namespace) -> int:
@@ -175,6 +190,12 @@ def build_parser() -> argparse.ArgumentParser:
     inspect = subparsers.add_parser("inspect", help="Extract the E2E subgraph for a page")
     inspect.add_argument("--page", required=True)
     inspect.set_defaults(handler=command_inspect)
+
+    trace = subparsers.add_parser("trace", help="Trace a view through services, routes, and workflows")
+    trace.add_argument("--view", required=True, help="Vaadin route, class name, or source path")
+    trace.add_argument("--format", choices=("json", "mermaid"), default="json")
+    trace.add_argument("--path-limit", type=int, default=1200)
+    trace.set_defaults(handler=command_trace)
 
     install = subparsers.add_parser("install-hooks", help="Install the post-merge Git hook")
     install.set_defaults(handler=command_install_hooks)

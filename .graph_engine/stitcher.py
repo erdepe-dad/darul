@@ -36,9 +36,8 @@ def normalize_url(url: str) -> str:
 
 
 STITCH_QUERY = """
-MATCH (r:Repository {name: $repo_name})-[:CONTAINS]->(:CodeFile)-[:CONTAINS]->(p:Page)-[:MAKES_REQUEST]->(a:APIEndpoint)
-MATCH (b:BackendRoute)
-WHERE a.normalized_url = b.normalized_url AND toUpper(a.method) = toUpper(b.method)
+MATCH (a:APIEndpoint {repo_name: $repo_name})
+MATCH (b:BackendRoute {normalized_url: a.normalized_url, method: a.method})
 MERGE (a)-[st:TARGETS_ROUTE]->(b)
 ON CREATE SET st.created_at = datetime()
 RETURN count(st) AS stitched

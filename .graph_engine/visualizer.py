@@ -6,7 +6,7 @@ import json
 import mimetypes
 import threading
 import webbrowser
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -16,6 +16,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from .config import SETTINGS, Settings
 from .db import GraphDB, GraphEngineError
+from .tracer import trace_view
 
 
 WEB_ROOT = Path(__file__).resolve().parent / "web"
@@ -27,6 +28,11 @@ DEFAULT_LABELS = (
     "Page",
     "APIEndpoint",
     "BackendRoute",
+    "WorkflowProcess",
+    "WorkflowStep",
+    "UIAction",
+    "ExternalSystem",
+    "MessageChannel",
     "Decision",
     "Session",
     "SessionEvent",
@@ -239,6 +245,10 @@ class GraphVisualizationService:
             "neighbors": [item for item in (row.get("neighbors") or []) if item],
         }
 
+    def trace(self, view: str, repository: str = "", path_limit: int = 1200) -> dict[str, Any]:
+        settings = replace(self.settings, repo_name=repository) if repository else self.settings
+        return trace_view(self.db, view, settings, path_limit=path_limit)
+
 
 @dataclass(slots=True)
 class VisualizationApplication:
@@ -290,6 +300,19 @@ class VisualizationApplication:
                             )
                         )
                         return
+                    if parsed.path == "/api/trace":
+                        view = query.get("view", [""])[0].strip()
+                        if not view:
+                            self._send_json({"error": "The view query parameter is required."}, HTTPStatus.BAD_REQUEST)
+                            return
+                        self._send_json(
+                            application.service.trace(
+                                view,
+                                repository=query.get("repository", [""])[0],
+                                path_limit=int(query.get("path_limit", ["1200"])[0]),
+                            )
+                        )
+                        return
                     if parsed.path.startswith("/api/node/"):
                         node_id = unquote(parsed.path.removeprefix("/api/node/"))
                         detail = application.service.node_detail(node_id)
@@ -322,7 +345,7 @@ class VisualizationApplication:
                 self.send_header("Content-Length", str(len(body)))
                 self.send_header("Cache-Control", "no-cache")
                 self.send_header("X-Content-Type-Options", "nosniff")
-                self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'")
+                self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'")
                 self.end_headers()
                 self.wfile.write(body)
 

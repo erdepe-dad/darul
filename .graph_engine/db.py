@@ -17,8 +17,16 @@ SCHEMA_QUERIES = (
     "CREATE CONSTRAINT page_id IF NOT EXISTS FOR (p:Page) REQUIRE p.id IS UNIQUE",
     "CREATE CONSTRAINT api_endpoint_id IF NOT EXISTS FOR (a:APIEndpoint) REQUIRE a.id IS UNIQUE",
     "CREATE CONSTRAINT backend_route_id IF NOT EXISTS FOR (b:BackendRoute) REQUIRE b.id IS UNIQUE",
+    "CREATE CONSTRAINT workflow_process_id IF NOT EXISTS FOR (p:WorkflowProcess) REQUIRE p.id IS UNIQUE",
+    "CREATE CONSTRAINT workflow_step_id IF NOT EXISTS FOR (s:WorkflowStep) REQUIRE s.id IS UNIQUE",
+    "CREATE CONSTRAINT ui_action_id IF NOT EXISTS FOR (a:UIAction) REQUIRE a.id IS UNIQUE",
+    "CREATE CONSTRAINT external_system_id IF NOT EXISTS FOR (s:ExternalSystem) REQUIRE s.id IS UNIQUE",
+    "CREATE CONSTRAINT message_channel_id IF NOT EXISTS FOR (m:MessageChannel) REQUIRE m.id IS UNIQUE",
     "CREATE CONSTRAINT decision_id IF NOT EXISTS FOR (d:Decision) REQUIRE d.id IS UNIQUE",
     "CREATE CONSTRAINT session_id IF NOT EXISTS FOR (s:Session) REQUIRE s.id IS UNIQUE",
+    "CREATE INDEX api_endpoint_lookup IF NOT EXISTS FOR (a:APIEndpoint) ON (a.normalized_url, a.method)",
+    "CREATE INDEX backend_route_lookup IF NOT EXISTS FOR (b:BackendRoute) ON (b.normalized_url, b.method)",
+    "CREATE INDEX message_channel_lookup IF NOT EXISTS FOR (m:MessageChannel) ON (m.broker, m.channel)",
 )
 
 

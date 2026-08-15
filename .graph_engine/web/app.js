@@ -6,17 +6,35 @@ const TYPE_STYLE = {
   Page: { color: "#996a48", shape: "square", order: 4 },
   APIEndpoint: { color: "#d83c2e", shape: "diamond", order: 5 },
   BackendRoute: { color: "#b07d14", shape: "route", order: 6 },
-  Decision: { color: "#8b4f78", shape: "decision", order: 7 },
-  Session: { color: "#777168", shape: "circle", order: 8 },
-  SessionEvent: { color: "#9b958c", shape: "square", order: 9 },
+  WorkflowProcess: { color: "#087f8c", shape: "hexagon", order: 7 },
+  WorkflowStep: { color: "#ef8354", shape: "square", order: 8 },
+  UIAction: { color: "#cf4f24", shape: "diamond", order: 9 },
+  ExternalSystem: { color: "#5f6b75", shape: "hexagon", order: 10 },
+  MessageChannel: { color: "#286f6c", shape: "route", order: 11 },
+  Decision: { color: "#8b4f78", shape: "decision", order: 12 },
+  Session: { color: "#777168", shape: "circle", order: 13 },
+  SessionEvent: { color: "#9b958c", shape: "square", order: 14 },
 };
 
 const RELATION_COLORS = {
   CONTAINS: "#8d877e",
   DEFINES: "#315f89",
+  IMPORTS: "#315f89",
   MAKES_REQUEST: "#d83c2e",
   TARGETS_ROUTE: "#b07d14",
   HANDLED_BY: "#4c725d",
+  HAS_STEP: "#087f8c",
+  NEXT: "#ef8354",
+  INVOKES: "#4c725d",
+  CALLS: "#087f8c",
+  HAS_ACTION: "#cf4f24",
+  DECLARED_IN: "#996a48",
+  STARTS_PROCESS: "#087f8c",
+  TARGETS_SYSTEM: "#5f6b75",
+  PUBLISHES_TO: "#286f6c",
+  CONSUMED_BY: "#286f6c",
+  ROUTES_TO: "#b07d14",
+  SAME_CHANNEL: "#8d877e",
   HAS_SESSION: "#777168",
   MADE_DECISION: "#8b4f78",
   AFFECTS: "#d83c2e",
@@ -32,6 +50,9 @@ const dom = Object.fromEntries([
   "neighbor-list", "fold-node", "fold-history", "toast", "scope-rail", "open-controls",
   "close-controls", "close-inspector", "keyboard-help", "key-dialog", "toggle-labels",
   "toggle-relations", "node-access-list",
+  "open-trace", "close-trace", "trace-sheet", "trace-form", "trace-view", "trace-state",
+  "trace-result", "trace-title", "trace-stats", "trace-warnings", "trace-board",
+  "trace-lanes", "trace-links", "copy-mermaid", "trace-lane-nav", "trace-access-list",
 ].map((id) => [id, document.getElementById(id)]));
 
 const state = {
@@ -48,6 +69,8 @@ const state = {
   historyIndex: 0,
   layout: "fold",
   loadingToken: 0,
+  mode: "atlas",
+  trace: null,
 };
 
 function primaryType(node) {
@@ -674,6 +697,7 @@ async function selectNode(id) {
   renderAccessibleNodes();
   dom["inspector-empty"].hidden = true;
   dom["inspector-content"].hidden = false;
+  dom["fold-node"].hidden = false;
   dom["node-number"].textContent = String(Math.max(1, state.graph.nodes.indexOf(node) + 1)).padStart(2, "0");
   dom["node-title"].textContent = node.label;
   dom["node-kinds"].replaceChildren(...node.labels.map((label) => {
@@ -690,6 +714,242 @@ async function selectNode(id) {
     renderDetail(detail);
   } catch (error) {
     showToast(error.message);
+  }
+}
+
+function setTraceMode(enabled) {
+  state.mode = enabled ? "trace" : "atlas";
+  dom["trace-sheet"].hidden = !enabled;
+  dom["paper-sheet"].hidden = enabled;
+  dom.legend.hidden = enabled;
+  dom["open-trace"].classList.toggle("active", enabled);
+  dom["open-trace"].setAttribute("aria-pressed", String(enabled));
+  document.querySelectorAll(".view-mode button, #unfold, #fit-graph, #refresh-graph").forEach((button) => {
+    button.disabled = enabled;
+  });
+  if (enabled) {
+    const selected = state.graph.nodes.find((node) => node.id === state.selected);
+    const suggestion = selected?.labels?.some((label) => ["Page", "Class", "CodeFile"].includes(label)) ? selected.label : state.search;
+    if (suggestion) dom["trace-view"].value = suggestion.replace(/^\//, "");
+    setTimeout(() => dom["trace-view"].focus(), 30);
+  } else {
+    document.querySelectorAll(".view-mode button, #fit-graph, #refresh-graph").forEach((button) => { button.disabled = false; });
+    dom.unfold.disabled = state.historyIndex === 0;
+    setTimeout(() => graphCanvas.resize(), 20);
+  }
+}
+
+function traceDepths(trace) {
+  const depths = new Map(trace.nodes.map((node) => [node.id, node.labels.includes("Page") ? 0 : 1]));
+  for (let pass = 0; pass < 12; pass += 1) {
+    let changed = false;
+    for (const link of trace.links) {
+      const candidate = (depths.get(link.source) || 0) + 1;
+      if (candidate > (depths.get(link.target) || 0) && candidate < 30) {
+        depths.set(link.target, candidate);
+        changed = true;
+      }
+    }
+    if (!changed) break;
+  }
+  return depths;
+}
+
+function inspectTraceNode(node) {
+  highlightTracePath(node.id);
+  state.selected = node.id;
+  dom["inspector-empty"].hidden = true;
+  dom["inspector-content"].hidden = false;
+  dom["fold-node"].hidden = true;
+  dom["node-number"].textContent = "TR";
+  dom["node-title"].textContent = node.label;
+  dom["node-kinds"].replaceChildren(...node.labels.map((label) => {
+    const span = document.createElement("span");
+    span.className = "node-kind";
+    span.textContent = label;
+    return span;
+  }));
+  const connected = state.trace.links.filter((link) => link.source === node.id || link.target === node.id);
+  renderDetail({
+    properties: node.properties,
+    neighbors: connected.map((link) => {
+      const otherId = link.source === node.id ? link.target : link.source;
+      const other = state.trace.nodes.find((item) => item.id === otherId);
+      return {
+        direction: link.source === node.id ? "out" : "in",
+        relationship: link.type,
+        node_id: otherId,
+        labels: other?.labels || [],
+        label: other?.label || otherId,
+      };
+    }),
+  });
+  setInspectorOpen(true);
+}
+
+function highlightTracePath(nodeId) {
+  if (!state.trace) return;
+  const active = new Set([nodeId]);
+  for (let pass = 0; pass < 12; pass += 1) {
+    let changed = false;
+    for (const link of state.trace.links) {
+      if (active.has(link.target) && !active.has(link.source)) { active.add(link.source); changed = true; }
+    }
+    if (!changed) break;
+  }
+  const descendants = new Set([nodeId]);
+  for (let pass = 0; pass < 12; pass += 1) {
+    let changed = false;
+    for (const link of state.trace.links) {
+      if (descendants.has(link.source) && !descendants.has(link.target)) { descendants.add(link.target); changed = true; }
+    }
+    if (!changed) break;
+  }
+  descendants.forEach((id) => active.add(id));
+  dom["trace-lanes"].querySelectorAll(".trace-node").forEach((button) => {
+    button.classList.toggle("trace-muted", !active.has(button.dataset.traceId));
+    button.classList.toggle("trace-active", button.dataset.traceId === nodeId);
+  });
+  dom["trace-links"].querySelectorAll(".trace-link").forEach((path) => {
+    path.classList.toggle("trace-muted", !(active.has(path.dataset.source) && active.has(path.dataset.target)));
+  });
+}
+
+function drawTraceLinks() {
+  if (!state.trace || dom["trace-sheet"].hidden) return;
+  const svg = dom["trace-links"];
+  const boardRect = dom["trace-board"].getBoundingClientRect();
+  const width = Math.max(dom["trace-board"].scrollWidth, boardRect.width);
+  const height = Math.max(dom["trace-board"].scrollHeight, boardRect.height);
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  svg.replaceChildren();
+  const defs = document.createElementNS("http://www.w3.org/2000/svg", "defs");
+  const marker = document.createElementNS("http://www.w3.org/2000/svg", "marker");
+  marker.setAttribute("id", "trace-arrow");
+  marker.setAttribute("viewBox", "0 0 10 10");
+  marker.setAttribute("refX", "8");
+  marker.setAttribute("refY", "5");
+  marker.setAttribute("markerWidth", "6");
+  marker.setAttribute("markerHeight", "6");
+  marker.setAttribute("orient", "auto-start-reverse");
+  const arrow = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  arrow.setAttribute("d", "M 0 0 L 10 5 L 0 10 z");
+  arrow.setAttribute("fill", "context-stroke");
+  marker.append(arrow);
+  defs.append(marker);
+  svg.append(defs);
+  for (const link of state.trace.links) {
+    const source = dom["trace-lanes"].querySelector(`[data-trace-id="${escapeSelector(link.source)}"]`);
+    const target = dom["trace-lanes"].querySelector(`[data-trace-id="${escapeSelector(link.target)}"]`);
+    if (!source || !target) continue;
+    const a = source.getBoundingClientRect();
+    const b = target.getBoundingClientRect();
+    const x1 = a.right - boardRect.left;
+    const y1 = a.top + a.height / 2 - boardRect.top;
+    const x2 = b.left - boardRect.left;
+    const y2 = b.top + b.height / 2 - boardRect.top;
+    const sameLane = Math.abs(x2 - x1) < 40;
+    const bend = Math.max(28, Math.abs(x2 - x1) * .45);
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("class", `trace-link${link.alternative ? " alternative" : ""}`);
+    path.dataset.source = link.source;
+    path.dataset.target = link.target;
+    path.setAttribute("d", sameLane
+      ? `M ${a.left + a.width / 2 - boardRect.left} ${a.bottom - boardRect.top} C ${a.left + a.width / 2 + 30 - boardRect.left} ${a.bottom + 18 - boardRect.top}, ${b.left + b.width / 2 + 30 - boardRect.left} ${b.top - 18 - boardRect.top}, ${b.left + b.width / 2 - boardRect.left} ${b.top - boardRect.top}`
+      : `M ${x1} ${y1} C ${x1 + bend} ${y1}, ${x2 - bend} ${y2}, ${x2} ${y2}`);
+    svg.append(path);
+    const detail = link.properties?.condition || link.properties?.name || (link.properties?.is_default ? "default" : "");
+    if (detail) {
+      const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      label.setAttribute("class", "trace-link-label");
+      label.setAttribute("x", String((x1 + x2) / 2));
+      label.setAttribute("y", String((y1 + y2) / 2 - 5));
+      label.textContent = shortLabel(detail, 54);
+      svg.append(label);
+    }
+  }
+}
+
+function renderTrace(trace) {
+  state.trace = trace;
+  dom["trace-state"].hidden = true;
+  dom["trace-result"].hidden = false;
+  dom["trace-title"].textContent = trace.seed?.classes?.[0] || trace.view;
+  dom["trace-title"].tabIndex = -1;
+  dom["trace-stats"].textContent = `${trace.stats.nodes} evidence forms · ${trace.stats.links} connections · ${trace.stats.alternatives} alternate paths`;
+  dom["trace-warnings"].replaceChildren(...trace.warnings.map((warning) => {
+    const item = document.createElement("div");
+    item.className = "trace-warning";
+    item.textContent = warning;
+    return item;
+  }));
+  const depths = traceDepths(trace);
+  dom["trace-lanes"].style.setProperty("--lane-count", trace.lanes.length);
+  dom["trace-lanes"].replaceChildren(...trace.lanes.map((lane) => {
+    const section = document.createElement("section");
+    section.className = "trace-lane";
+    section.dataset.traceLane = lane.name;
+    const heading = document.createElement("h4");
+    heading.textContent = `${lane.name} · ${lane.nodes.length}`;
+    section.append(heading);
+    const nodes = lane.nodes.map((id) => trace.nodes.find((node) => node.id === id)).filter(Boolean)
+      .sort((a, b) => (depths.get(a.id) || 0) - (depths.get(b.id) || 0) || a.label.localeCompare(b.label));
+    for (const node of nodes) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "trace-node";
+      button.dataset.traceId = node.id;
+      const meta = node.properties.source_file_id || node.properties.process_key || node.properties.system || node.properties.repo_name || "";
+      button.innerHTML = '<span class="trace-node-kind"></span><span class="trace-node-title"></span><span class="trace-node-meta"></span>';
+      button.querySelector(".trace-node-kind").textContent = node.labels.join(" · ");
+      button.querySelector(".trace-node-title").textContent = node.label;
+      button.querySelector(".trace-node-meta").textContent = meta;
+      button.addEventListener("click", () => inspectTraceNode(node));
+      section.append(button);
+    }
+    return section;
+  }));
+  dom["trace-lane-nav"].replaceChildren(...trace.lanes.map((lane) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = `${lane.name} ${lane.nodes.length}`;
+    button.addEventListener("click", () => {
+      const target = [...dom["trace-lanes"].children].find((section) => section.dataset.traceLane === lane.name);
+      if (target) dom["trace-result"].querySelector(".trace-scroll").scrollTo({ left: target.offsetLeft, behavior: "smooth" });
+    });
+    return button;
+  }));
+  dom["trace-access-list"].replaceChildren(...trace.links.map((link) => {
+    const item = document.createElement("li");
+    const source = trace.nodes.find((node) => node.id === link.source)?.label || link.source;
+    const target = trace.nodes.find((node) => node.id === link.target)?.label || link.target;
+    const detail = link.properties?.condition || link.properties?.name || (link.properties?.is_default ? "default" : "");
+    item.textContent = `${source} ${link.type.toLowerCase().replaceAll("_", " ")} ${target}${detail ? ` when ${detail}` : ""}`;
+    return item;
+  }));
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    drawTraceLinks();
+    dom["trace-title"].focus({ preventScroll: true });
+  }));
+}
+
+async function runTrace(view) {
+  const requested = view.trim();
+  if (!requested) return;
+  dom["trace-result"].hidden = true;
+  dom["trace-state"].hidden = false;
+  dom["trace-state"].classList.add("loading");
+  dom["trace-state"].innerHTML = "<strong>Following the evidence chain</strong><span>Resolving UI actions, Java calls, routes, workflow branches, and systems.</span>";
+  try {
+    const params = new URLSearchParams({ view: requested, repository: state.repository || "sample-web" });
+    const trace = await api(`/api/trace?${params}`);
+    if (!trace.found) throw new Error(trace.warnings?.[0] || "Entry point not found");
+    renderTrace(trace);
+  } catch (error) {
+    dom["trace-state"].innerHTML = "<strong>That entry point could not be traced.</strong><span></span>";
+    dom["trace-state"].querySelector("span").textContent = error.message;
+  } finally {
+    dom["trace-state"].classList.remove("loading");
   }
 }
 
@@ -721,6 +981,11 @@ function renderDetail(detail) {
     button.querySelector(".neighbor-title").textContent = neighbor.label;
     button.querySelector(".neighbor-type").textContent = `${neighbor.relationship} · ${(neighbor.labels || []).join(", ")}`;
     button.addEventListener("click", () => {
+      if (state.mode === "trace") {
+        const traceNode = state.trace?.nodes.find((item) => item.id === neighbor.node_id);
+        if (traceNode) inspectTraceNode(traceNode);
+        return;
+      }
       const present = state.graph.nodes.some((node) => node.id === neighbor.node_id);
       if (present) selectNode(neighbor.node_id);
       else foldTo(neighbor.node_id, neighbor.label);
@@ -812,6 +1077,27 @@ function bindUI() {
   dom["refresh-graph"].addEventListener("click", () => loadGraph({ fit: false }));
   dom["fit-graph"].addEventListener("click", () => graphCanvas.fit());
   dom.unfold.addEventListener("click", unfold);
+  dom["open-trace"].addEventListener("click", () => setTraceMode(true));
+  dom["close-trace"].addEventListener("click", () => setTraceMode(false));
+  dom["trace-form"].addEventListener("submit", (event) => {
+    event.preventDefault();
+    runTrace(dom["trace-view"].value);
+  });
+  dom["copy-mermaid"].addEventListener("click", async () => {
+    if (!state.trace?.mermaid) return;
+    try {
+      await navigator.clipboard.writeText(state.trace.mermaid);
+      showToast("Mermaid diagram copied");
+    } catch {
+      const area = document.createElement("textarea");
+      area.value = state.trace.mermaid;
+      document.body.append(area);
+      area.select();
+      document.execCommand("copy");
+      area.remove();
+      showToast("Mermaid diagram copied");
+    }
+  });
   dom["fold-node"].addEventListener("click", () => { const node = state.graph.nodes.find((item) => item.id === state.selected); if (node) foldTo(node.id, node.label); });
   document.querySelectorAll("[data-layout]").forEach((button) => button.addEventListener("click", () => {
     state.layout = button.dataset.layout;
@@ -850,6 +1136,7 @@ function bindUI() {
     if (dom["key-dialog"].hidden && event.key === "/" && !["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement.tagName)) { event.preventDefault(); dom.search.focus(); }
     if (event.key === "Escape") {
       if (!dom["key-dialog"].hidden) closeKeys();
+      else if (state.mode === "trace") setTraceMode(false);
       else if (dom["scope-rail"].classList.contains("open")) setControlsOpen(false, true);
       else if (dom.inspector.classList.contains("open") && innerWidth <= 860) setInspectorOpen(false, true);
       else unfold();
@@ -864,7 +1151,7 @@ function bindUI() {
       dom.inspector.removeAttribute("aria-hidden");
     }
   };
-  addEventListener("resize", syncDrawerSemantics);
+  addEventListener("resize", () => { syncDrawerSemantics(); drawTraceLinks(); });
   syncDrawerSemantics();
 }
 
