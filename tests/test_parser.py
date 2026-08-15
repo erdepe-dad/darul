@@ -204,6 +204,27 @@ public class ExampleWorkflow {
         )
         self.assertNotIn("ExampleWorkflow.if", {function.name for function in parsed.functions})
 
+    def test_java_commented_process_starts_are_ignored(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "CommentedWorkflowView.java"
+            source.write_text(
+                '''import org.flowable.engine.RuntimeService;
+public class CommentedWorkflowView {
+    public void submit(RuntimeService runtimeService) {
+        // runtimeService.startProcessInstanceByKey("disabled-process");
+        /* runtimeService.startProcessInstanceByKey("also-disabled"); */
+    }
+}
+''',
+                encoding="utf-8",
+            )
+            parsed = parse_file(source, settings_for(root))
+
+        self.assertEqual(parsed.process_starts, [])
+        self.assertNotIn("disabled-process", parsed.workflow_refs)
+        self.assertNotIn("also-disabled", parsed.workflow_refs)
+
     def test_java_extracts_message_publishers_consumers_and_rabbit_bindings(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

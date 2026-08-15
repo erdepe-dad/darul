@@ -817,6 +817,7 @@ def _parse_java(
     list[MessageUse], list[MessageBinding],
 ]:
     imports = sorted(set(JAVA_IMPORT_RE.findall(text)))
+    comment_free_text = _mask_java_comments(text)
     newline_offsets = [match.start() for match in re.finditer("\n", text)]
 
     def line_at(offset: int) -> int:
@@ -987,7 +988,7 @@ def _parse_java(
                 )
             )
 
-    inheritance_text = _mask_java_comments(text)
+    inheritance_text = comment_free_text
     qualified_base = r"(?:[A-Za-z_$][\w$]*\.)*"
     inherited_jpa_rest = re.search(
         rf"\bextends\s+{qualified_base}(?:FilterableJpaRestController|JpaRestController)\b",
@@ -1108,8 +1109,8 @@ def _parse_java(
             add_request(match.group(1).upper(), match.group(2), match.start())
 
     workflow_refs = sorted(
-        {value for pattern in JAVA_WORKFLOW_PATTERNS for value in pattern.findall(text)}
-    ) if any(marker in text for marker in ("startProcess", "@JobWorker", "@Process")) else []
+        {value for pattern in JAVA_WORKFLOW_PATTERNS for value in pattern.findall(comment_free_text)}
+    ) if any(marker in comment_free_text for marker in ("startProcess", "@JobWorker", "@Process")) else []
     if "implements JavaDelegate" in text:
         workflow_refs.append(f"delegate:{primary_type}")
 
@@ -1191,11 +1192,11 @@ def _parse_java(
         if call.group(1) in local_methods and not is_declaration:
             add_call(call.start(), classes[0].qualified_name if classes else primary_type, call.group(1))
 
-    has_process_start = "startProcess" in text
-    local_constants = dict(JAVA_STRING_CONSTANT_RE.findall(text)) if has_process_start else {}
+    has_process_start = "startProcess" in comment_free_text
+    local_constants = dict(JAVA_STRING_CONSTANT_RE.findall(comment_free_text)) if has_process_start else {}
     assigned_strings: dict[str, set[str]] = {}
     if has_process_start:
-        for name, value in JAVA_STRING_FIELD_ASSIGNMENT_RE.findall(text):
+        for name, value in JAVA_STRING_FIELD_ASSIGNMENT_RE.findall(comment_free_text):
             assigned_strings.setdefault(name, set()).add(value)
 
     process_key_returns: set[str] = set()
@@ -1203,7 +1204,7 @@ def _parse_java(
         for start, closing, _, method_name in method_regions:
             if method_name != "getProcessDefinitionKey":
                 continue
-            for returned in re.findall(r"\breturn\s+([^;]+);", text[start:closing]):
+            for returned in re.findall(r"\breturn\s+([^;]+);", comment_free_text[start:closing]):
                 expression = returned.strip().removeprefix("this.")
                 if expression.startswith('"') and expression.endswith('"'):
                     process_key_returns.add(expression[1:-1])
@@ -1229,7 +1230,7 @@ def _parse_java(
 
     process_starts: list[ProcessStart] = []
     seen_starts: set[tuple[str, str, int]] = set()
-    for match in JAVA_PROCESS_START_RE.finditer(text) if has_process_start else ():
+    for match in JAVA_PROCESS_START_RE.finditer(comment_free_text) if has_process_start else ():
         source_id, _ = source_method(match.start())
         line = line_at(match.start())
         for process_key in resolve_process_keys(match.group(1)):
@@ -1731,7 +1732,8 @@ WITH source, start, collect(DISTINCT process) AS candidates
 WITH source, start, candidates,
      [candidate IN candidates WHERE candidate.repo_name = source.repo_name] AS local_candidates
 WITH source, start, CASE
-    WHEN size(local_candidates) > 0 THEN local_candidates
+    WHEN size(local_candidates) = 1 THEN local_candidates
+    WHEN size(local_candidates) > 1 THEN []
     WHEN size(candidates) = 1 THEN candidates
     ELSE []
 END AS selected
@@ -1790,7 +1792,8 @@ WITH s, binding, collect(DISTINCT c) AS candidates
 WITH s, candidates,
      [candidate IN candidates WHERE candidate.repo_name = s.repo_name] AS local_candidates
 WITH s, CASE
-    WHEN size(local_candidates) > 0 THEN local_candidates
+    WHEN size(local_candidates) = 1 THEN local_candidates
+    WHEN size(local_candidates) > 1 THEN []
     WHEN size(candidates) = 1 THEN candidates
     ELSE []
 END AS selected
@@ -1810,7 +1813,8 @@ WITH s, collect(DISTINCT p) AS candidates
 WITH s, candidates,
      [candidate IN candidates WHERE candidate.repo_name = s.repo_name] AS local_candidates
 WITH s, CASE
-    WHEN size(local_candidates) > 0 THEN local_candidates
+    WHEN size(local_candidates) = 1 THEN local_candidates
+    WHEN size(local_candidates) > 1 THEN []
     WHEN size(candidates) = 1 THEN candidates
     ELSE []
 END AS selected
