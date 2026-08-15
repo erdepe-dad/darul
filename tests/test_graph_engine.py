@@ -19,6 +19,12 @@ class NormalizationTests(unittest.TestCase):
     def test_absolute_urls_drop_origin_query_and_trailing_slash(self) -> None:
         self.assertEqual(normalize_url("https://service.test/api/users/?active=1"), "/api/users")
 
+    def test_absolute_urls_with_a_leading_slash_drop_the_origin(self) -> None:
+        self.assertEqual(
+            normalize_url("/http://localhost:40000/api/users?active=1"),
+            "/api/users",
+        )
+
 
 class ContextRenderingTests(unittest.TestCase):
     def test_decision_lineage_is_delineated(self) -> None:

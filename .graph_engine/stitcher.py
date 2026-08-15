@@ -20,6 +20,7 @@ PARAMETER_PATTERNS = (
 def normalize_url(url: str) -> str:
     """Convert route parameter dialects into a comparable path."""
     value = url.strip().strip("`'\"")
+    value = re.sub(r"^/+(?=[A-Za-z][A-Za-z0-9+.-]*://)", "", value)
     if "://" in value:
         value = urlsplit(value).path
     else:
