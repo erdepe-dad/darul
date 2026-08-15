@@ -344,6 +344,14 @@ GO_ROUTE_RE = re.compile(
     r"\b(HandleFunc|Handle|GET|POST|PUT|PATCH|DELETE)\s*\(\s*\"([^\"]+)\"(?:\s*,\s*([A-Za-z_]\w*))?"
 )
 JAVA_IMPORT_RE = re.compile(r"(?m)^\s*import\s+(?:static\s+)?([\w.*]+)\s*;")
+JAVA_COMMENT_TOKEN_RE = re.compile(
+    r'"(?:\\.|[^"\\])*(?:"|\Z)'
+    r"|'(?:\\.|[^'\\])*(?:'|\Z)"
+    r"|//[^\r\n]*"
+    r"|/\*.*?(?:\*/|\Z)",
+    re.DOTALL,
+)
+NON_NEWLINE_RE = re.compile(r"[^\r\n]")
 JAVA_TYPE_RE = re.compile(
     r"(?m)^\s*(?:public\s+|protected\s+|private\s+|abstract\s+|final\s+|sealed\s+|static\s+)*"
     r"(class|interface|record|enum)\s+([A-Za-z_$][\w$]*)([^\n{]*)"
@@ -728,44 +736,13 @@ def _java_expression_url(expression: str) -> str | None:
 
 def _mask_java_comments(text: str) -> str:
     """Replace Java comments with spaces while preserving strings, offsets, and newlines."""
-    chars = list(text)
-    index = 0
-    quote = ""
-    escaped = False
-    while index < len(chars):
-        char = chars[index]
-        if quote:
-            if escaped:
-                escaped = False
-            elif char == "\\":
-                escaped = True
-            elif char == quote:
-                quote = ""
-            index += 1
-            continue
-        if char in {'"', "'"}:
-            quote = char
-            index += 1
-            continue
-        if char == "/" and index + 1 < len(chars) and chars[index + 1] == "/":
-            while index < len(chars) and chars[index] not in "\r\n":
-                chars[index] = " "
-                index += 1
-            continue
-        if char == "/" and index + 1 < len(chars) and chars[index + 1] == "*":
-            chars[index] = chars[index + 1] = " "
-            index += 2
-            while index < len(chars):
-                if chars[index] == "*" and index + 1 < len(chars) and chars[index + 1] == "/":
-                    chars[index] = chars[index + 1] = " "
-                    index += 2
-                    break
-                if chars[index] not in "\r\n":
-                    chars[index] = " "
-                index += 1
-            continue
-        index += 1
-    return "".join(chars)
+    def mask_token(match: re.Match[str]) -> str:
+        token = match.group(0)
+        if token.startswith(('"', "'")):
+            return token
+        return NON_NEWLINE_RE.sub(" ", token)
+
+    return JAVA_COMMENT_TOKEN_RE.sub(mask_token, text)
 
 
 def _spring_view_route(text: str) -> str | None:
@@ -817,7 +794,14 @@ def _parse_java(
     list[MessageUse], list[MessageBinding],
 ]:
     imports = sorted(set(JAVA_IMPORT_RE.findall(text)))
-    comment_free_text = _mask_java_comments(text)
+    comment_sensitive_markers = (
+        "startProcess", "@JobWorker", "@Process", "JpaRestController", "FlowController",
+    )
+    comment_free_text = (
+        _mask_java_comments(text)
+        if any(marker in text for marker in comment_sensitive_markers)
+        else text
+    )
     newline_offsets = [match.start() for match in re.finditer("\n", text)]
 
     def line_at(offset: int) -> int:

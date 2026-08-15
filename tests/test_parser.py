@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 from graph_engine.config import Settings
-from graph_engine.parser import parse_file, scan_repository
+from graph_engine.parser import _mask_java_comments, parse_file, scan_repository
 
 
 def settings_for(root: Path) -> Settings:
@@ -22,6 +22,21 @@ def settings_for(root: Path) -> Settings:
 
 
 class ParserTests(unittest.TestCase):
+    def test_java_comment_mask_preserves_strings_offsets_and_newlines(self) -> None:
+        source = '''String url = "http://service/path/*literal*/"; // line comment
+char slash = '/'; /* block
+comment */ call();
+'''
+
+        masked = _mask_java_comments(source)
+
+        self.assertEqual(len(masked), len(source))
+        self.assertEqual(masked.count("\n"), source.count("\n"))
+        self.assertIn('"http://service/path/*literal*/"', masked)
+        self.assertIn("call();", masked)
+        self.assertNotIn("line comment", masked)
+        self.assertNotIn("block", masked)
+
     def test_python_ast_extracts_symbols_requests_and_routes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
