@@ -107,14 +107,17 @@ def sync_changes(
 ) -> SyncResult:
     started = time.monotonic()
     result = SyncResult()
+    structure_changed = False
     for change in changes if changes is not None else git_changes(settings, base, head):
         if change.status == "R" and change.old_path and change.old_path != change.path:
             delete_file(db, change.old_path, settings)
             result.deleted.append(change.old_path)
+            structure_changed = True
         if _is_excluded(change.path, settings):
             # Keep incremental sync aligned with full scans and clean up any stale excluded node.
             delete_file(db, change.path, settings)
             result.skipped.append(change.path)
+            structure_changed = True
             continue
         extension = Path(change.path).suffix.lower()
         if extension not in SOURCE_EXTENSIONS and not change.path.lower().endswith(".bpmn20.xml"):
@@ -123,6 +126,7 @@ def sync_changes(
         if change.status == "D":
             delete_file(db, change.path, settings)
             result.deleted.append(change.path)
+            structure_changed = True
             continue
         source_path = settings.repo_root / change.path
         if not source_path.is_file():
@@ -133,9 +137,11 @@ def sync_changes(
             clear_file_children(db, change.path, settings)
             ingest_files(db, [parsed], settings, reconcile=False)
             result.added_or_modified.append(change.path)
+            structure_changed = True
         except (OSError, SyntaxError, UnicodeError, ValueError) as exc:
             result.errors.append(f"{change.path}: {exc}")
-    reconcile_structural_links(db)
-    stitch_endpoints(db, settings)
+    if structure_changed:
+        reconcile_structural_links(db)
+        stitch_endpoints(db, settings)
     result.duration_seconds = time.monotonic() - started
     return result

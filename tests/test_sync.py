@@ -104,6 +104,18 @@ class SyncTests(unittest.TestCase):
         ]
         self.assertEqual(deleted_file_ids, [])
 
+    def test_sync_non_source_changes_skip_graph_reconciliation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            db = FakeDB()
+            result = sync_changes(
+                db,
+                settings_for(Path(directory)),
+                changes=[Change("M", "README.md")],
+            )
+
+        self.assertEqual(result.skipped, ["README.md"])
+        self.assertEqual(db.calls, [])
+
 
 if __name__ == "__main__":
     unittest.main()
