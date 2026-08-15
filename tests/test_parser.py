@@ -301,7 +301,12 @@ public class RemoteResourceClient {
             source.write_text(
                 '''import org.springframework.web.client.RestTemplate;
 public class ConfiguredApiClient {
+    static String KEY = "BACKEND_API_URL";
     RestTemplate restTemplate;
+    String base_url;
+    ConfiguredApiClient() {
+        this.base_url = config.getConfig(this.KEY).getValue();
+    }
     String getBaseUrl() {
         return config.getConfigValue(Constants.SECONDARY_API_URL) + "/api/resources";
     }
@@ -312,6 +317,10 @@ public class ConfiguredApiClient {
     void download() {
         String url = new Config().getConfig("ASSET_API_URL").getValue() + "/api/car";
         restTemplate().getForObject(url, String.class);
+    }
+    void roles() {
+        String url = this.base_url + "/roleMapping";
+        restTemplate.exchange(url, HttpMethod.GET, null, String.class);
     }
 }
 ''',
@@ -325,6 +334,7 @@ public class ConfiguredApiClient {
         }
         self.assertIn(("GET", "/api/resources/categories", "SECONDARY_API_URL"), requests)
         self.assertIn(("GET", "/api/car", "ASSET_API_URL"), requests)
+        self.assertIn(("GET", "/roleMapping", "BACKEND_API_URL"), requests)
 
     def test_java_vaadin_8_spring_view_and_exchange_variable(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

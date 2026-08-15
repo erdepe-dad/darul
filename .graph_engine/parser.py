@@ -513,7 +513,8 @@ def _java_system_hint(expression: str, text: str) -> str:
         key = config_call.group(1) or config_call.group(2)
         return constants.get(key, key)
     receiver = re.match(
-        r"\s*([A-Za-z_$][\w$]*)(?:\.[A-Za-z_$][\w$]*\s*\([^)]*\))*\s*\+",
+        r"\s*(?:this\.)?([A-Za-z_$][\w$]*)"
+        r"(?:\.[A-Za-z_$][\w$]*\s*\([^)]*\))*\s*\+",
         expression,
     )
     if not receiver:
