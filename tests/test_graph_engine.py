@@ -3,7 +3,18 @@ from __future__ import annotations
 import unittest
 
 from graph_engine.hooks.context_inject import render_context
-from graph_engine.stitcher import normalize_url
+from graph_engine.stitcher import normalize_url, stitch_endpoints
+
+
+class StitchDB:
+    def __init__(self) -> None:
+        self.query = ""
+        self.parameters: dict = {}
+
+    def execute_write(self, query: str, **parameters):
+        self.query = query
+        self.parameters = parameters
+        return [{"stitched": 3}]
 
 
 class NormalizationTests(unittest.TestCase):
@@ -24,6 +35,16 @@ class NormalizationTests(unittest.TestCase):
             normalize_url("/http://localhost:40000/api/users?active=1"),
             "/api/users",
         )
+
+    def test_stitching_revisits_requests_from_all_repositories(self) -> None:
+        db = StitchDB()
+
+        stitched = stitch_endpoints(db)
+
+        self.assertEqual(stitched, 3)
+        self.assertIn("MATCH (a:APIEndpoint)", db.query)
+        self.assertNotIn("repo_name", db.query)
+        self.assertEqual(db.parameters, {})
 
 
 class ContextRenderingTests(unittest.TestCase):

@@ -37,7 +37,7 @@ def normalize_url(url: str) -> str:
 
 
 STITCH_QUERY = """
-MATCH (a:APIEndpoint {repo_name: $repo_name})
+MATCH (a:APIEndpoint)
 MATCH (b:BackendRoute {normalized_url: a.normalized_url, method: a.method})
 MERGE (a)-[st:TARGETS_ROUTE]->(b)
 ON CREATE SET st.created_at = datetime()
@@ -58,7 +58,9 @@ RETURN f.path AS page, p.route_path AS route_path, f.frameworks AS frameworks,
 
 
 def stitch_endpoints(db: GraphDB, settings: Settings = SETTINGS) -> int:
-    rows = db.execute_write(STITCH_QUERY, repo_name=settings.repo_name)
+    # Revisit every request so cross-repository links do not depend on build order.
+    _ = settings
+    rows = db.execute_write(STITCH_QUERY)
     return int(rows[0]["stitched"]) if rows else 0
 
 
