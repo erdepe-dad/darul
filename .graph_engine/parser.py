@@ -1704,17 +1704,12 @@ FOREACH (relationship IN old_relationships | DELETE relationship)
 WITH 1 AS ready
 MATCH (source)-[:DECLARES_CALL]->(call:CallSite)
 WHERE source:Function OR source:UIAction
-CALL {
-    WITH call
-    MATCH (owner:Class {qualified_name: call.target_type})
-    RETURN owner
-    UNION
-    WITH call
-    WITH call
-    WHERE NOT call.target_type CONTAINS '.'
-    MATCH (owner:Class {name: call.target_type})
-    RETURN owner
-}
+OPTIONAL MATCH (qualified_owner:Class {qualified_name: call.target_type})
+OPTIONAL MATCH (simple_owner:Class {name: call.target_type})
+WHERE NOT call.target_type CONTAINS '.'
+WITH source, call,
+     collect(DISTINCT qualified_owner) + collect(DISTINCT simple_owner) AS owners
+UNWIND owners AS owner
 MATCH (file:CodeFile)-[:DEFINES]->(owner)
 MATCH (file)-[:DEFINES]->(target:Function)
 WHERE target.name = owner.name + '.' + call.target_method
@@ -1867,13 +1862,110 @@ UNWIND selected AS target
 MERGE (file)-[:IMPORTS]->(target)
 """
 
+STITCH_SCOPED_JAVA_IMPORTS = """
+MATCH (file:CodeFile)
+WHERE file.id IN $file_ids
+   OR any(imported IN file.imports WHERE imported IN $class_identifiers)
+OPTIONAL MATCH (file)-[old:IMPORTS]->(:Class)
+WITH file, collect(old) AS old_relationships
+FOREACH (relationship IN old_relationships | DELETE relationship)
+WITH file
+WHERE file.extension = '.java'
+UNWIND file.imports AS imported
+MATCH (candidate:Class {qualified_name: imported})
+WITH file, imported, collect(DISTINCT candidate) AS candidates
+WITH file, candidates,
+     [candidate IN candidates WHERE candidate.repo_name = file.repo_name] AS local_candidates
+WITH file, CASE
+    WHEN size(local_candidates) > 0 THEN local_candidates
+    WHEN size(candidates) = 1 THEN candidates
+    ELSE []
+END AS selected
+UNWIND selected AS target
+MERGE (file)-[:IMPORTS]->(target)
+"""
 
-def reconcile_structural_links(db: GraphDB) -> None:
-    db.execute_write(STITCH_JAVA_IMPORTS)
-    db.execute_write(STITCH_FUNCTION_CALLS)
+STITCH_SCOPED_FUNCTION_CALLS = """
+MATCH (source)-[:DECLARES_CALL]->(seed:CallSite)
+WHERE (source:Function OR source:UIAction)
+  AND (source.source_file_id IN $file_ids OR seed.target_type IN $class_identifiers)
+WITH DISTINCT source
+OPTIONAL MATCH (source)-[old:CALLS]->(:Function)
+WHERE old.managed_by = 'callsite'
+WITH source, collect(old) AS old_relationships
+FOREACH (relationship IN old_relationships | DELETE relationship)
+WITH source
+MATCH (source)-[:DECLARES_CALL]->(call:CallSite)
+OPTIONAL MATCH (qualified_owner:Class {qualified_name: call.target_type})
+OPTIONAL MATCH (simple_owner:Class {name: call.target_type})
+WHERE NOT call.target_type CONTAINS '.'
+WITH source, call,
+     collect(DISTINCT qualified_owner) + collect(DISTINCT simple_owner) AS owners
+UNWIND owners AS owner
+MATCH (file:CodeFile)-[:DEFINES]->(owner)
+MATCH (file)-[:DEFINES]->(target:Function)
+WHERE target.name = owner.name + '.' + call.target_method
+WITH source, call, collect(DISTINCT target) AS candidates
+WITH source, call, candidates,
+     [candidate IN candidates WHERE candidate.repo_name = source.repo_name] AS local_candidates
+WITH source, call, CASE
+    WHEN size(local_candidates) > 0 THEN local_candidates
+    WHEN size(candidates) = 1 THEN candidates
+    ELSE []
+END AS selected
+UNWIND selected AS target
+MERGE (source)-[relationship:CALLS {id: call.id, target_id: target.id}]->(target)
+SET relationship.line = call.line, relationship.condition = call.condition,
+    relationship.managed_by = 'callsite'
+"""
+
+STITCH_SCOPED_WORKFLOW_BINDINGS = """
+MATCH (s:WorkflowStep)
+WHERE s.source_file_id IN $file_ids
+   OR any(binding IN s.bindings WHERE binding IN $class_identifiers)
+OPTIONAL MATCH (s)-[old:INVOKES]->(:Class)
+WITH s, collect(old) AS old_relationships
+FOREACH (relationship IN old_relationships | DELETE relationship)
+WITH s
+UNWIND s.bindings AS binding
+MATCH (c:Class)
+WHERE binding = c.qualified_name OR binding IN c.aliases
+WITH s, binding, collect(DISTINCT c) AS candidates
+WITH s, candidates,
+     [candidate IN candidates WHERE candidate.repo_name = s.repo_name] AS local_candidates
+WITH s, CASE
+    WHEN size(local_candidates) = 1 THEN local_candidates
+    WHEN size(local_candidates) > 1 THEN []
+    WHEN size(candidates) = 1 THEN candidates
+    ELSE []
+END AS selected
+UNWIND selected AS c
+MERGE (s)-[:INVOKES]->(c)
+"""
+
+
+def reconcile_structural_links(
+    db: GraphDB,
+    *,
+    file_ids: list[str] | None = None,
+    class_identifiers: list[str] | None = None,
+) -> None:
+    if file_ids is None:
+        db.execute_write(STITCH_JAVA_IMPORTS)
+        db.execute_write(STITCH_FUNCTION_CALLS)
+    else:
+        parameters = {
+            "file_ids": file_ids,
+            "class_identifiers": class_identifiers or [],
+        }
+        db.execute_write(STITCH_SCOPED_JAVA_IMPORTS, **parameters)
+        db.execute_write(STITCH_SCOPED_FUNCTION_CALLS, **parameters)
     db.execute_write(STITCH_WORKFLOW_STARTS)
     db.execute_write(STITCH_MESSAGE_CHANNELS)
-    db.execute_write(STITCH_WORKFLOW_BINDINGS)
+    if file_ids is None:
+        db.execute_write(STITCH_WORKFLOW_BINDINGS)
+    else:
+        db.execute_write(STITCH_SCOPED_WORKFLOW_BINDINGS, **parameters)
     db.execute_write(STITCH_CALLED_PROCESSES)
 
 

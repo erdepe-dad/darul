@@ -12,12 +12,17 @@ from graph_engine.sync import Change, git_changes, sync_changes
 class FakeDB:
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict]] = []
+        self.read_rows: list[dict] = []
 
     def execute_write(self, query: str, **parameters):
         self.calls.append((query, parameters))
         if "RETURN count(st) AS stitched" in query:
             return [{"stitched": 0}]
         return []
+
+    def execute_read(self, query: str, **parameters):
+        self.calls.append((query, parameters))
+        return self.read_rows
 
 
 def settings_for(root: Path, excludes: frozenset[str] = frozenset()) -> Settings:
@@ -115,6 +120,48 @@ class SyncTests(unittest.TestCase):
 
         self.assertEqual(result.skipped, ["README.md"])
         self.assertEqual(db.calls, [])
+
+    def test_sync_scopes_reconciliation_to_changed_and_referencing_files(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "RenamedService.java"
+            source.write_text(
+                "package sample;\npublic class RenamedService {}\n",
+                encoding="utf-8",
+            )
+            db = FakeDB()
+            db.read_rows = [
+                {
+                    "name": "OldService",
+                    "qualified_name": "sample.OldService",
+                    "aliases": ["oldService"],
+                }
+            ]
+            sync_changes(
+                db,
+                settings_for(root),
+                changes=[Change("M", source.name)],
+            )
+
+        scoped_parameters = [
+            parameters
+            for _, parameters in db.calls
+            if "class_identifiers" in parameters
+        ]
+        self.assertEqual(len(scoped_parameters), 3)
+        for parameters in scoped_parameters:
+            self.assertEqual(parameters["file_ids"], ["repo:RenamedService.java"])
+            self.assertEqual(
+                parameters["class_identifiers"],
+                [
+                    "OldService",
+                    "RenamedService",
+                    "oldService",
+                    "renamedService",
+                    "sample.OldService",
+                    "sample.RenamedService",
+                ],
+            )
 
 
 if __name__ == "__main__":

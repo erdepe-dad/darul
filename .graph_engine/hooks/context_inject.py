@@ -13,9 +13,13 @@ from ..db import GraphDB, GraphEngineError
 
 DECISIONS_QUERY = """
 MATCH (r:Repository {name: $repo_name})-[:HAS_SESSION]->(:Session)-[:MADE_DECISION]->(d:Decision)
-WHERE NOT ()-[:SUPERSEDES]->(d) AND coalesce(d.status, 'ACTIVE') = 'ACTIVE'
+OPTIONAL MATCH ()-[incoming]->(d)
+WHERE type(incoming) = 'SUPERSEDES'
+WITH d, incoming
+WHERE incoming IS NULL AND coalesce(d.status, 'ACTIVE') = 'ACTIVE'
 OPTIONAL MATCH (d)-[:AFFECTS]->(f:CodeFile)
-OPTIONAL MATCH (d)-[:SUPERSEDES]->(old:Decision)
+OPTIONAL MATCH (d)-[lineage]->(old:Decision)
+WHERE type(lineage) = 'SUPERSEDES'
 RETURN d.title AS active_decision, d.rationale AS rationale,
        collect(DISTINCT f.path) AS affected_files, old.title AS superseded_decision,
        d.date AS date

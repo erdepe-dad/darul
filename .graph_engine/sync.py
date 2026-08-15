@@ -72,6 +72,26 @@ MATCH (f:CodeFile {id: $file_id})
 DETACH DELETE f
 """
 
+FILE_CLASS_IDENTIFIERS_QUERY = """
+MATCH (f:CodeFile {id: $file_id})-[:DEFINES]->(class:Class)
+RETURN class.name AS name, class.qualified_name AS qualified_name, class.aliases AS aliases
+"""
+
+
+def _file_class_identifiers(db: GraphDB, rel_path: str, settings: Settings) -> set[str]:
+    rows = db.execute_read(
+        FILE_CLASS_IDENTIFIERS_QUERY,
+        file_id=f"{settings.repo_name}:{rel_path}",
+    )
+    identifiers: set[str] = set()
+    for row in rows:
+        identifiers.update(
+            value
+            for value in (row.get("name"), row.get("qualified_name"), *(row.get("aliases") or []))
+            if value
+        )
+    return identifiers
+
 
 def clear_file_children(db: GraphDB, rel_path: str, settings: Settings = SETTINGS) -> None:
     parameters = {
@@ -108,40 +128,61 @@ def sync_changes(
     started = time.monotonic()
     result = SyncResult()
     structure_changed = False
+    changed_file_ids: set[str] = set()
+    class_identifiers: set[str] = set()
     for change in changes if changes is not None else git_changes(settings, base, head):
         if change.status == "R" and change.old_path and change.old_path != change.path:
+            class_identifiers.update(_file_class_identifiers(db, change.old_path, settings))
             delete_file(db, change.old_path, settings)
             result.deleted.append(change.old_path)
             structure_changed = True
+            changed_file_ids.add(f"{settings.repo_name}:{change.old_path}")
         if _is_excluded(change.path, settings):
             # Keep incremental sync aligned with full scans and clean up any stale excluded node.
+            class_identifiers.update(_file_class_identifiers(db, change.path, settings))
             delete_file(db, change.path, settings)
             result.skipped.append(change.path)
             structure_changed = True
+            changed_file_ids.add(f"{settings.repo_name}:{change.path}")
             continue
         extension = Path(change.path).suffix.lower()
         if extension not in SOURCE_EXTENSIONS and not change.path.lower().endswith(".bpmn20.xml"):
             result.skipped.append(change.path)
             continue
         if change.status == "D":
+            class_identifiers.update(_file_class_identifiers(db, change.path, settings))
             delete_file(db, change.path, settings)
             result.deleted.append(change.path)
             structure_changed = True
+            changed_file_ids.add(f"{settings.repo_name}:{change.path}")
             continue
         source_path = settings.repo_root / change.path
         if not source_path.is_file():
             result.errors.append(f"{change.path}: file does not exist")
             continue
         try:
+            old_class_identifiers = _file_class_identifiers(db, change.path, settings)
             parsed = parse_file(source_path, settings)
             clear_file_children(db, change.path, settings)
             ingest_files(db, [parsed], settings, reconcile=False)
             result.added_or_modified.append(change.path)
             structure_changed = True
+            changed_file_ids.add(parsed.id)
+            class_identifiers.update(old_class_identifiers)
+            for symbol in parsed.classes:
+                class_identifiers.update(
+                    value
+                    for value in (symbol.name, symbol.qualified_name, *symbol.aliases)
+                    if value
+                )
         except (OSError, SyntaxError, UnicodeError, ValueError) as exc:
             result.errors.append(f"{change.path}: {exc}")
     if structure_changed:
-        reconcile_structural_links(db)
+        reconcile_structural_links(
+            db,
+            file_ids=sorted(changed_file_ids),
+            class_identifiers=sorted(class_identifiers),
+        )
         stitch_endpoints(db, settings)
     result.duration_seconds = time.monotonic() - started
     return result
