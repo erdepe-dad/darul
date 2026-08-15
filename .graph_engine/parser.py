@@ -986,9 +986,11 @@ def _parse_java(
                 )
             )
 
+    inheritance_text = _mask_java_comments(text)
+    qualified_base = r"(?:[A-Za-z_$][\w$]*\.)*"
     inherited_jpa_rest = re.search(
-        r"\bextends\s+(?:FilterableJpaRestController|JpaRestController)\b",
-        text,
+        rf"\bextends\s+{qualified_base}(?:FilterableJpaRestController|JpaRestController)\b",
+        inheritance_text,
     )
     if inherited_jpa_rest and class_prefix:
         frameworks.append("spring-jpa-rest")
@@ -1004,7 +1006,10 @@ def _parse_java(
                 )
             )
 
-    inherited_read_only = re.search(r"\bextends\s+ReadOnlyJpaRestController\b", text)
+    inherited_read_only = re.search(
+        rf"\bextends\s+{qualified_base}ReadOnlyJpaRestController\b",
+        inheritance_text,
+    )
     if inherited_read_only and class_prefix:
         frameworks.append("spring-read-only-rest")
         for suffix in ("", "/{param}"):
@@ -1016,7 +1021,10 @@ def _parse_java(
                 )
             )
 
-    inherited_flow = re.search(r"\bextends\s+FlowController\b", text)
+    inherited_flow = re.search(
+        rf"\bextends\s+{qualified_base}FlowController\b",
+        inheritance_text,
+    )
     if inherited_flow and class_prefix:
         frameworks.append("flowable-rest")
         for method, suffix in (

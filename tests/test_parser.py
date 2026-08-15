@@ -468,6 +468,38 @@ public class ApprovalFlowController extends FlowController<Approval, QApproval> 
         self.assertIn("spring-read-only-rest", parsed_read_only.frameworks)
         self.assertIn("flowable-rest", parsed_flow.frameworks)
 
+    def test_java_inherited_controllers_support_qualified_names_and_ignore_comments(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            qualified = root / "QualifiedController.java"
+            qualified.write_text(
+                '''@RestController
+@RequestMapping("/qualified")
+public class QualifiedController
+        extends com.example.web.ReadOnlyJpaRestController<Item, Long> {}
+''',
+                encoding="utf-8",
+            )
+            commented = root / "CommentedController.java"
+            commented.write_text(
+                '''@RestController
+@RequestMapping("/commented")
+public class CommentedController {
+    // Historical: extends FlowController<Item, QItem>
+}
+''',
+                encoding="utf-8",
+            )
+            parsed_qualified = parse_file(qualified, settings_for(root))
+            parsed_commented = parse_file(commented, settings_for(root))
+
+        self.assertEqual(
+            {(route.method, route.normalized_url) for route in parsed_qualified.routes},
+            {("GET", "/qualified"), ("GET", "/qualified/{param}")},
+        )
+        self.assertNotIn("flowable-rest", parsed_commented.frameworks)
+        self.assertEqual(parsed_commented.routes, [])
+
     def test_java_vaadin_actions_calls_requests_and_systems(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
