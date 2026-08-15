@@ -92,7 +92,7 @@ The post-merge installer adds a marked block to `.git/hooks/post-merge`. Existin
 
 Python uses the standard-library `ast` module. Other languages use bounded structural regular expressions designed for speed and graceful degradation. The fallback parsers are not full compilers and may miss heavily generated syntax, macros, dynamic routing, unusual decorators, or calls assembled across multiple expressions.
 
-Flowable BPMN uses the standard-library XML parser. Each process becomes a `WorkflowProcess`; tasks, events, and gateways become ordered `WorkflowStep` nodes. Runtime starts are persisted as `WorkflowStart` references, allowing `STARTS_PROCESS` links to be reconciled after the matching BPMN repository is scanned. Delegate expressions, listener classes, and called processes prefer matches in the BPMN repository, then resolve a unique cross-repository match. Ambiguous cross-repository aliases and process keys remain unlinked instead of creating speculative edges.
+Flowable BPMN uses the standard-library XML parser. Each process becomes a `WorkflowProcess`; tasks, events, and gateways become ordered `WorkflowStep` nodes. Runtime starts are persisted as `WorkflowStart` references, allowing `STARTS_PROCESS` links to be reconciled after the matching BPMN repository is scanned. Runtime starts, delegate expressions, listener classes, and called processes prefer matches in the source repository, then resolve a unique cross-repository match. Ambiguous cross-repository aliases and process keys remain unlinked instead of creating speculative edges.
 
 When extending a parser:
 

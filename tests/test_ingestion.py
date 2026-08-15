@@ -81,6 +81,12 @@ public class FlowService {
                 for query, _ in db.calls
             )
         )
+        workflow_stitch = next(
+            query for query, _ in db.calls
+            if "old_start.managed_by = 'workflow-start'" in query
+        )
+        self.assertIn("size(candidates) = 1", workflow_stitch)
+        self.assertIn("candidate.repo_name = source.repo_name", workflow_stitch)
 
     def test_workflow_reconciliation_runs_when_only_a_java_worker_is_ingested(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

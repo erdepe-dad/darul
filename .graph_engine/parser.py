@@ -1707,11 +1707,29 @@ MERGE (source)-[:DECLARES_START]->(start)
 """
 
 STITCH_WORKFLOW_STARTS = """
+OPTIONAL MATCH (:WorkflowStart)-[old_resolution:RESOLVES_TO]->(:WorkflowProcess)
+WITH collect(old_resolution) AS old_resolutions
+FOREACH (relationship IN old_resolutions | DELETE relationship)
+WITH 1 AS resolutions_cleared
+OPTIONAL MATCH (:Function)-[old_start:STARTS_PROCESS]->(:WorkflowProcess)
+WHERE old_start.managed_by = 'workflow-start'
+WITH collect(old_start) AS old_starts
+FOREACH (relationship IN old_starts | DELETE relationship)
+WITH 1 AS ready
 MATCH (source:Function)-[:DECLARES_START]->(start:WorkflowStart)
 MATCH (process:WorkflowProcess {process_key: start.process_key})
+WITH source, start, collect(DISTINCT process) AS candidates
+WITH source, start, candidates,
+     [candidate IN candidates WHERE candidate.repo_name = source.repo_name] AS local_candidates
+WITH source, start, CASE
+    WHEN size(local_candidates) > 0 THEN local_candidates
+    WHEN size(candidates) = 1 THEN candidates
+    ELSE []
+END AS selected
+UNWIND selected AS process
 MERGE (start)-[:RESOLVES_TO]->(process)
 MERGE (source)-[starts:STARTS_PROCESS {id: start.id}]->(process)
-SET starts.line = start.line
+SET starts.line = start.line, starts.managed_by = 'workflow-start'
 """
 
 UPSERT_MESSAGE_CHANNELS = """
