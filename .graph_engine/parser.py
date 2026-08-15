@@ -1429,9 +1429,15 @@ def scan_repository(settings: Settings = SETTINGS) -> ScanResult:
 
 CLEAR_REPOSITORY_STRUCTURE = """
 MATCH (n {repo_name: $repo_name})
-WHERE n:CodeFile OR n:Class OR n:Function OR n:Page OR n:APIEndpoint OR n:BackendRoute
+WHERE n:Class OR n:Function OR n:Page OR n:APIEndpoint OR n:BackendRoute
    OR n:WorkflowProcess OR n:WorkflowStep OR n:UIAction OR n:ExternalSystem OR n:MessageChannel
 DETACH DELETE n
+"""
+
+PRUNE_STALE_FILES = """
+MATCH (f:CodeFile {repo_name: $repo_name})
+WHERE NOT f.id IN $file_ids
+DETACH DELETE f
 """
 
 UPSERT_FILES = """
@@ -1612,6 +1618,11 @@ MERGE (f)-[:IMPORTS]->(c)
 def ingest_files(db: GraphDB, files: list[ParsedFile], settings: Settings = SETTINGS, *, replace_all: bool = False) -> None:
     if replace_all:
         db.execute_write(CLEAR_REPOSITORY_STRUCTURE, repo_name=settings.repo_name)
+        db.execute_write(
+            PRUNE_STALE_FILES,
+            repo_name=settings.repo_name,
+            file_ids=[item.id for item in files],
+        )
     if not files:
         db.execute_write(
             "MERGE (r:Repository {name: $repo_name}) SET r.root_path = $root_path, r.updated_at = datetime()",

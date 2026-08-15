@@ -42,6 +42,12 @@ def health():
         self.assertTrue(all(item.startswith("repo-a:") for item in ids))
         self.assertTrue(any("BackendRoute" in query for query, _ in db.calls))
 
+        clear_query, _ = db.calls[0]
+        self.assertNotIn("n:CodeFile", clear_query)
+        prune_query, prune_parameters = db.calls[1]
+        self.assertIn("MATCH (f:CodeFile", prune_query)
+        self.assertEqual(prune_parameters["file_ids"], ["repo-a:service.py"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -20,8 +20,8 @@ class FakeDB:
         return []
 
 
-def settings_for(root: Path) -> Settings:
-    return Settings(root, "repo", "bolt://unused", "neo4j", "x", None, 1.0, frozenset())
+def settings_for(root: Path, excludes: frozenset[str] = frozenset()) -> Settings:
+    return Settings(root, "repo", "bolt://unused", "neo4j", "x", None, 1.0, excludes)
 
 
 class SyncTests(unittest.TestCase):
@@ -46,6 +46,24 @@ class SyncTests(unittest.TestCase):
         self.assertEqual(result.deleted, ["removed.ts"])
         deleted_ids = [parameters.get("file_id") for _, parameters in db.calls if "file_id" in parameters]
         self.assertEqual(deleted_ids, ["repo:app.py", "repo:removed.ts"])
+
+    def test_sync_skips_excluded_directories_and_removes_stale_nodes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            excluded = root / ".graph_engine" / "parser.py"
+            excluded.parent.mkdir()
+            excluded.write_text("def internal():\n    return 1\n", encoding="utf-8")
+            db = FakeDB()
+            result = sync_changes(
+                db,
+                settings_for(root, frozenset({".graph_engine"})),
+                changes=[Change("M", ".graph_engine/parser.py")],
+            )
+
+        self.assertEqual(result.added_or_modified, [])
+        self.assertEqual(result.skipped, [".graph_engine/parser.py"])
+        deleted_ids = [parameters.get("file_id") for _, parameters in db.calls if "file_id" in parameters]
+        self.assertEqual(deleted_ids, ["repo:.graph_engine/parser.py"])
 
 
 if __name__ == "__main__":

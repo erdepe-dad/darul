@@ -73,6 +73,10 @@ def delete_file(db: GraphDB, rel_path: str, settings: Settings = SETTINGS) -> No
     )
 
 
+def _is_excluded(rel_path: str, settings: Settings) -> bool:
+    return any(part in settings.excludes for part in Path(rel_path).parts)
+
+
 def sync_changes(
     db: GraphDB,
     settings: Settings = SETTINGS,
@@ -87,6 +91,11 @@ def sync_changes(
         if change.old_path and change.old_path != change.path:
             delete_file(db, change.old_path, settings)
             result.deleted.append(change.old_path)
+        if _is_excluded(change.path, settings):
+            # Keep incremental sync aligned with full scans and clean up any stale excluded node.
+            delete_file(db, change.path, settings)
+            result.skipped.append(change.path)
+            continue
         extension = Path(change.path).suffix.lower()
         if extension not in SOURCE_EXTENSIONS and not change.path.lower().endswith(".bpmn20.xml"):
             result.skipped.append(change.path)
