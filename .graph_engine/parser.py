@@ -824,7 +824,7 @@ def _parse_java(
     behavioral_file = any(
         marker in text
         for marker in (
-            "@SpringView", "@RestController", "@Controller", "@Service", "@Component",
+            "@SpringView", "@Route", "@RestController", "@Controller", "@Service", "@Component",
             "@Repository", "RuntimeService", "JavaDelegate", "addClickListener",
             "addSelectionListener", "addValueChangeListener", "restTemplate", "WebClient",
             "@KafkaListener", "@RabbitListener", "@JmsListener", "@RedisListener",
@@ -1547,7 +1547,7 @@ def scan_repository(settings: Settings = SETTINGS) -> ScanResult:
 CLEAR_REPOSITORY_STRUCTURE = """
 MATCH (n {repo_name: $repo_name})
 WHERE n:Class OR n:Function OR n:Page OR n:APIEndpoint OR n:BackendRoute
-   OR n:WorkflowProcess OR n:WorkflowStep OR n:WorkflowStart OR n:UIAction
+   OR n:CallSite OR n:WorkflowProcess OR n:WorkflowStep OR n:WorkflowStart OR n:UIAction
    OR n:ExternalSystem OR n:MessageChannel
 DETACH DELETE n
 """
@@ -1659,12 +1659,42 @@ MATCH (fn:Function {id: row.handler_id})
 MERGE (a)-[:DECLARED_IN]->(fn)
 """
 
-UPSERT_FUNCTION_CALLS = """
+UPSERT_CALL_SITES = """
 UNWIND $rows AS row
-MATCH (source {id: row.source_id}), (target:Function {id: row.target_id})
+MATCH (source {id: row.source_id})
 WHERE source:Function OR source:UIAction
-MERGE (source)-[call:CALLS {id: row.id, target_id: row.target_id}]->(target)
-SET call.line = row.line, call.condition = row.condition
+MERGE (call:CallSite {id: row.id})
+SET call.target_type = row.target_type, call.target_method = row.target_method,
+    call.line = row.line, call.condition = row.condition,
+    call.repo_name = source.repo_name, call.source_file_id = source.source_file_id
+MERGE (source)-[:DECLARES_CALL]->(call)
+"""
+
+STITCH_FUNCTION_CALLS = """
+OPTIONAL MATCH (source)-[old:CALLS]->(:Function)
+WHERE (source:Function OR source:UIAction) AND old.managed_by = 'callsite'
+WITH collect(old) AS old_relationships
+FOREACH (relationship IN old_relationships | DELETE relationship)
+WITH 1 AS ready
+MATCH (source)-[:DECLARES_CALL]->(call:CallSite)
+WHERE source:Function OR source:UIAction
+MATCH (file:CodeFile)-[:DEFINES]->(owner:Class)
+MATCH (file)-[:DEFINES]->(target:Function)
+WHERE target.name = owner.name + '.' + call.target_method
+  AND (owner.qualified_name = call.target_type
+       OR (NOT call.target_type CONTAINS '.' AND owner.name = call.target_type))
+WITH source, call, collect(DISTINCT target) AS candidates
+WITH source, call, candidates,
+     [candidate IN candidates WHERE candidate.repo_name = source.repo_name] AS local_candidates
+WITH source, call, CASE
+    WHEN size(local_candidates) > 0 THEN local_candidates
+    WHEN size(candidates) = 1 THEN candidates
+    ELSE []
+END AS selected
+UNWIND selected AS target
+MERGE (source)-[relationship:CALLS {id: call.id, target_id: target.id}]->(target)
+SET relationship.line = call.line, relationship.condition = call.condition,
+    relationship.managed_by = 'callsite'
 """
 
 UPSERT_PROCESS_STARTS = """
@@ -1768,7 +1798,22 @@ MERGE (f)-[:IMPORTS]->(c)
 """
 
 
-def ingest_files(db: GraphDB, files: list[ParsedFile], settings: Settings = SETTINGS, *, replace_all: bool = False) -> None:
+def reconcile_structural_links(db: GraphDB) -> None:
+    db.execute_write(STITCH_FUNCTION_CALLS)
+    db.execute_write(STITCH_WORKFLOW_STARTS)
+    db.execute_write(STITCH_MESSAGE_CHANNELS)
+    db.execute_write(STITCH_WORKFLOW_BINDINGS)
+    db.execute_write(STITCH_CALLED_PROCESSES)
+
+
+def ingest_files(
+    db: GraphDB,
+    files: list[ParsedFile],
+    settings: Settings = SETTINGS,
+    *,
+    replace_all: bool = False,
+    reconcile: bool = True,
+) -> None:
     if replace_all:
         db.execute_write(CLEAR_REPOSITORY_STRUCTURE, repo_name=settings.repo_name)
         db.execute_write(
@@ -1782,6 +1827,8 @@ def ingest_files(db: GraphDB, files: list[ParsedFile], settings: Settings = SETT
             repo_name=settings.repo_name,
             root_path=str(settings.repo_root),
         )
+        if reconcile:
+            reconcile_structural_links(db)
         return
     file_rows = [
         {"id": item.id, "path": item.path, "extension": item.extension, "content_hash": item.content_hash,
@@ -1831,36 +1878,18 @@ def ingest_files(db: GraphDB, files: list[ParsedFile], settings: Settings = SETT
     if action_rows:
         db.execute_write(UPSERT_UI_ACTIONS, repo_name=settings.repo_name, rows=action_rows)
 
-    class_files = {
-        symbol.qualified_name: item.id
-        for item in files
-        for symbol in item.classes
-        if symbol.qualified_name
-    }
-    functions_by_target: dict[tuple[str, str], list[str]] = {}
-    for item in files:
-        qualified_types = [symbol.qualified_name for symbol in item.classes if symbol.qualified_name]
-        for function in item.functions:
-            method_name = function.name.rsplit(".", 1)[-1]
-            for qualified_type in qualified_types:
-                functions_by_target.setdefault((qualified_type, method_name), []).append(function.id)
-    call_rows: list[dict[str, Any]] = []
+    call_rows = []
     for item in files:
         for call in item.function_calls:
-            target_type = call.target_type.split("<", 1)[0]
-            candidates = functions_by_target.get((target_type, call.target_method), [])
-            if not candidates and "." not in target_type:
-                matches = [key for key in functions_by_target if key[0].endswith("." + target_type) and key[1] == call.target_method]
-                candidates = [target for key in matches for target in functions_by_target[key]]
-            for target_id in candidates:
-                call_rows.append(dict(asdict(call), target_id=target_id))
+            row = asdict(call)
+            row["target_type"] = call.target_type.split("<", 1)[0]
+            call_rows.append(row)
     if call_rows:
-        db.execute_write(UPSERT_FUNCTION_CALLS, rows=call_rows)
+        db.execute_write(UPSERT_CALL_SITES, rows=call_rows)
 
     process_start_rows = [asdict(start) for item in files for start in item.process_starts]
     if process_start_rows:
         db.execute_write(UPSERT_PROCESS_STARTS, rows=process_start_rows)
-    db.execute_write(STITCH_WORKFLOW_STARTS)
 
     channel_rows_by_id: dict[str, dict[str, Any]] = {}
     message_use_rows: list[dict[str, Any]] = []
@@ -1902,9 +1931,8 @@ def ingest_files(db: GraphDB, files: list[ParsedFile], settings: Settings = SETT
         ]
         if binding_rows:
             db.execute_write(UPSERT_MESSAGE_BINDINGS, rows=binding_rows)
-        db.execute_write(STITCH_MESSAGE_CHANNELS)
-    db.execute_write(STITCH_WORKFLOW_BINDINGS)
-    db.execute_write(STITCH_CALLED_PROCESSES)
+    if reconcile:
+        reconcile_structural_links(db)
     classes_by_name = {
         symbol.qualified_name: symbol.id
         for item in files

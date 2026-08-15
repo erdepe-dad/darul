@@ -109,6 +109,37 @@ public class FlowService {
         self.assertNotIn("$repo_name", called_process_query)
         self.assertIn("size(candidates) = 1", called_process_query)
 
+    def test_function_calls_are_persisted_for_graph_wide_reconciliation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "ExampleTaskView.java"
+            source.write_text(
+                '''import com.vaadin.flow.router.Route;
+import sample.service.ExampleTaskService;
+@Route("tasks")
+public class ExampleTaskView {
+    ExampleTaskService service;
+    public void load() { service.findTasks(); }
+}
+''',
+                encoding="utf-8",
+            )
+            settings = Settings(root, "ui-repo", "bolt://unused", "neo4j", "x", None, 1.0, frozenset())
+            parsed = parse_file(source, settings)
+            db = FakeDB()
+
+            ingest_files(db, [parsed], settings)
+
+        call_rows = next(
+            parameters["rows"]
+            for query, parameters in db.calls
+            if "MERGE (call:CallSite" in query
+        )
+        self.assertEqual(call_rows[0]["target_type"], "sample.service.ExampleTaskService")
+        self.assertEqual(call_rows[0]["target_method"], "findTasks")
+        stitch_query = next(query for query, _ in db.calls if "managed_by = 'callsite'" in query)
+        self.assertIn("size(candidates) = 1", stitch_query)
+
 
 if __name__ == "__main__":
     unittest.main()

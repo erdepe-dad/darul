@@ -50,6 +50,10 @@ class SyncTests(unittest.TestCase):
             if "DETACH DELETE f" in query
         ]
         self.assertEqual(deleted_file_ids, ["repo:removed.ts"])
+        self.assertEqual(
+            sum("managed_by = 'callsite'" in query for query, _ in db.calls),
+            1,
+        )
 
     def test_sync_skips_excluded_directories_and_removes_stale_nodes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

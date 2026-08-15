@@ -9,7 +9,7 @@ from pathlib import Path
 
 from .config import SETTINGS, Settings
 from .db import GraphDB, GraphEngineError
-from .parser import SOURCE_EXTENSIONS, ingest_files, parse_file
+from .parser import SOURCE_EXTENSIONS, ingest_files, parse_file, reconcile_structural_links
 from .stitcher import stitch_endpoints
 
 
@@ -57,7 +57,7 @@ def git_changes(settings: Settings = SETTINGS, base: str = "ORIG_HEAD", head: st
 DELETE_FILE_CHILDREN_QUERY = """
 MATCH (n {repo_name: $repo_name, source_file_id: $file_id})
 WHERE n:Class OR n:Function OR n:Page OR n:APIEndpoint OR n:BackendRoute
-   OR n:WorkflowProcess OR n:WorkflowStep OR n:WorkflowStart OR n:UIAction
+   OR n:CallSite OR n:WorkflowProcess OR n:WorkflowStep OR n:WorkflowStart OR n:UIAction
    OR n:ExternalSystem OR n:MessageChannel
 DETACH DELETE n
 """
@@ -131,10 +131,11 @@ def sync_changes(
         try:
             parsed = parse_file(source_path, settings)
             clear_file_children(db, change.path, settings)
-            ingest_files(db, [parsed], settings)
+            ingest_files(db, [parsed], settings, reconcile=False)
             result.added_or_modified.append(change.path)
         except (OSError, SyntaxError, UnicodeError, ValueError) as exc:
             result.errors.append(f"{change.path}: {exc}")
+    reconcile_structural_links(db)
     stitch_endpoints(db, settings)
     result.duration_seconds = time.monotonic() - started
     return result

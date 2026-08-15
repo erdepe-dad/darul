@@ -26,6 +26,7 @@ Every repository has one unique `Repository.name`. File and symbol IDs are globa
 CodeFile:      {repository}:{relative_path}
 Class:         {repository}:{relative_path}::{class_name}
 Function:      {repository}:{relative_path}::{function_signature}
+CallSite:      {repository}:{relative_path}::call:{line}:{target_type}.{target_method}
 Page:          {repository}:{relative_path}
 BackendRoute:  {repository}:{method}:{normalized_path}
 WorkflowStart: {repository}:{relative_path}::process-start:{process_key}:{line}
@@ -40,6 +41,8 @@ Do not change ID generation without a migration plan. IDs are referenced by deci
 ```text
 (Repository)-[:CONTAINS]->(CodeFile)
 (CodeFile)-[:DEFINES]->(Class|Function)
+(Function|UIAction)-[:DECLARES_CALL]->(CallSite)
+(Function|UIAction)-[:CALLS]->(Function)
 (CodeFile)-[:CONTAINS]->(Page)
 (Page)-[:MAKES_REQUEST]->(APIEndpoint)
 (APIEndpoint)-[:TARGETS_ROUTE]->(BackendRoute)
@@ -81,7 +84,7 @@ The full build does not delete other repository roots.
 
 ## Incremental synchronization
 
-`sync` reads a Git name-status diff. Deleted and renamed-away files have their owned structural subtree removed. Added, modified, and renamed-to files are reparsed individually and replaced. Endpoint stitching runs after the changed subtrees are written.
+`sync` reads a Git name-status diff. Deleted and renamed-away files have their owned structural subtree removed. Added, modified, and renamed-to files are reparsed individually and replaced. Call sites and workflow references are persisted during each file update, then graph-wide reconciliation and endpoint stitching run once after all changed subtrees are written.
 
 The post-merge installer adds a marked block to `.git/hooks/post-merge`. Existing hook content is preserved, and repeated installation replaces only Darul's marked block.
 
