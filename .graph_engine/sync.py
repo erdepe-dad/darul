@@ -57,7 +57,8 @@ def git_changes(settings: Settings = SETTINGS, base: str = "ORIG_HEAD", head: st
 DELETE_FILE_CHILDREN_QUERY = """
 MATCH (n {repo_name: $repo_name, source_file_id: $file_id})
 WHERE n:Class OR n:Function OR n:Page OR n:APIEndpoint OR n:BackendRoute
-   OR n:WorkflowProcess OR n:WorkflowStep OR n:UIAction OR n:ExternalSystem OR n:MessageChannel
+   OR n:WorkflowProcess OR n:WorkflowStep OR n:WorkflowStart OR n:UIAction
+   OR n:ExternalSystem OR n:MessageChannel
 DETACH DELETE n
 """
 

@@ -19,6 +19,7 @@ SCHEMA_QUERIES = (
     "CREATE CONSTRAINT backend_route_id IF NOT EXISTS FOR (b:BackendRoute) REQUIRE b.id IS UNIQUE",
     "CREATE CONSTRAINT workflow_process_id IF NOT EXISTS FOR (p:WorkflowProcess) REQUIRE p.id IS UNIQUE",
     "CREATE CONSTRAINT workflow_step_id IF NOT EXISTS FOR (s:WorkflowStep) REQUIRE s.id IS UNIQUE",
+    "CREATE CONSTRAINT workflow_start_id IF NOT EXISTS FOR (s:WorkflowStart) REQUIRE s.id IS UNIQUE",
     "CREATE CONSTRAINT ui_action_id IF NOT EXISTS FOR (a:UIAction) REQUIRE a.id IS UNIQUE",
     "CREATE CONSTRAINT external_system_id IF NOT EXISTS FOR (s:ExternalSystem) REQUIRE s.id IS UNIQUE",
     "CREATE CONSTRAINT message_channel_id IF NOT EXISTS FOR (m:MessageChannel) REQUIRE m.id IS UNIQUE",

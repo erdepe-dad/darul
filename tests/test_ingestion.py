@@ -48,6 +48,40 @@ def health():
         self.assertIn("MATCH (f:CodeFile", prune_query)
         self.assertEqual(prune_parameters["file_ids"], ["repo-a:service.py"])
 
+    def test_workflow_starts_are_persisted_before_a_process_is_available(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "FlowService.java"
+            source.write_text(
+                '''import org.flowable.engine.RuntimeService;
+public class FlowService {
+    public void start(RuntimeService runtimeService) {
+        runtimeService.startProcessInstanceByKey("late-process");
+    }
+}
+''',
+                encoding="utf-8",
+            )
+            settings = Settings(root, "repo-a", "bolt://unused", "neo4j", "x", None, 1.0, frozenset())
+            parsed = parse_file(source, settings)
+            db = FakeDB()
+
+            ingest_files(db, [parsed], settings)
+
+        start_call = next(
+            (query, parameters)
+            for query, parameters in db.calls
+            if "MERGE (start:WorkflowStart" in query
+        )
+        self.assertEqual(start_call[1]["rows"][0]["process_key"], "late-process")
+        self.assertTrue(start_call[1]["rows"][0]["id"].startswith("repo-a:"))
+        self.assertTrue(
+            any(
+                "MATCH (source:Function)-[:DECLARES_START]->(start:WorkflowStart)" in query
+                for query, _ in db.calls
+            )
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

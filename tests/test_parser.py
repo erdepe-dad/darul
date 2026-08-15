@@ -165,6 +165,10 @@ public class UsersView implements JavaDelegate {
         self.assertEqual(parsed.routes[0].normalized_url, "/api/users/{param}")
         self.assertEqual(parsed.requests[0].normalized_url, "/api/roles/{param}")
         self.assertIn("user-onboarding", parsed.workflow_refs)
+        self.assertEqual(
+            {start.process_key for start in parsed.process_starts},
+            {"user-onboarding"},
+        )
         self.assertIn("delegate:UsersView", parsed.workflow_refs)
 
     def test_java_resolves_flow_service_process_keys(self) -> None:

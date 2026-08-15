@@ -28,6 +28,7 @@ Class:         {repository}:{relative_path}::{class_name}
 Function:      {repository}:{relative_path}::{function_signature}
 Page:          {repository}:{relative_path}
 BackendRoute:  {repository}:{method}:{normalized_path}
+WorkflowStart: {repository}:{relative_path}::process-start:{process_key}:{line}
 Decision:      {repository}:{uuid}
 Session:       {repository}:{external_session_id}
 ```
@@ -50,6 +51,8 @@ Do not change ID generation without a migration plan. IDs are referenced by deci
 (WorkflowStep)-[:NEXT]->(WorkflowStep)
 (WorkflowStep)-[:INVOKES]->(Class)
 (WorkflowStep)-[:CALLS]->(WorkflowProcess)
+(Function)-[:DECLARES_START]->(WorkflowStart)
+(Function)-[:STARTS_PROCESS]->(WorkflowProcess)
 (Function)-[:PUBLISHES_TO]->(MessageChannel)
 (MessageChannel)-[:ROUTES_TO|SAME_CHANNEL]->(MessageChannel)
 (MessageChannel)-[:CONSUMED_BY]->(Function)
@@ -70,7 +73,8 @@ The schema creates unique constraints for repositories, files, symbols, pages, e
 4. Ensure graph constraints exist.
 5. Replace structural nodes owned by the active repository.
 6. Batch-ingest files and children using globally scoped IDs.
-7. Normalize endpoint paths and create `TARGETS_ROUTE` relationships where method and path match.
+7. Reconcile persisted workflow starts with matching BPMN processes across all repositories.
+8. Normalize endpoint paths and create `TARGETS_ROUTE` relationships where method and path match.
 
 The full build does not delete other repository roots.
 
@@ -84,7 +88,7 @@ The post-merge installer adds a marked block to `.git/hooks/post-merge`. Existin
 
 Python uses the standard-library `ast` module. Other languages use bounded structural regular expressions designed for speed and graceful degradation. The fallback parsers are not full compilers and may miss heavily generated syntax, macros, dynamic routing, unusual decorators, or calls assembled across multiple expressions.
 
-Flowable BPMN uses the standard-library XML parser. Each process becomes a `WorkflowProcess`; tasks, events, and gateways become ordered `WorkflowStep` nodes. Delegate expressions and fully qualified listener classes resolve to Java `Class` nodes when a matching Spring bean alias or class name exists.
+Flowable BPMN uses the standard-library XML parser. Each process becomes a `WorkflowProcess`; tasks, events, and gateways become ordered `WorkflowStep` nodes. Runtime starts are persisted as `WorkflowStart` references, allowing `STARTS_PROCESS` links to be reconciled after the matching BPMN repository is scanned. Delegate expressions and fully qualified listener classes resolve to Java `Class` nodes when a matching Spring bean alias or class name exists.
 
 When extending a parser:
 

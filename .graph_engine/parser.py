@@ -411,7 +411,8 @@ JAVA_VARIABLE_TYPE_RE = re.compile(
     r'\b([A-Z][A-Za-z0-9_$]*(?:<[^;=()]+>)?)\s+([A-Za-z_$][\w$]*)\s*(?=[=;,)\"])'
 )
 JAVA_PROCESS_START_RE = re.compile(
-    r"\b(?:startProcessInstanceByKey(?:AndTenantId)?|startProcess)\s*\(\s*([^,\n]+)"
+    r"\b(?:startProcessInstanceByKey(?:AndTenantId)?|startProcess)\s*\(\s*"
+    r'("(?:\\.|[^"\\])*"|(?:[A-Za-z_$][\w$]*\.)*[A-Za-z_$][\w$]*(?:\s*\(\s*\))?)'
 )
 JAVA_STRING_FIELD_ASSIGNMENT_RE = re.compile(
     r"\b(?:this\.)?([A-Za-z_$][\w$]*)\s*=\s*\"([^\"]+)\"\s*;"
@@ -1546,7 +1547,8 @@ def scan_repository(settings: Settings = SETTINGS) -> ScanResult:
 CLEAR_REPOSITORY_STRUCTURE = """
 MATCH (n {repo_name: $repo_name})
 WHERE n:Class OR n:Function OR n:Page OR n:APIEndpoint OR n:BackendRoute
-   OR n:WorkflowProcess OR n:WorkflowStep OR n:UIAction OR n:ExternalSystem OR n:MessageChannel
+   OR n:WorkflowProcess OR n:WorkflowStep OR n:WorkflowStart OR n:UIAction
+   OR n:ExternalSystem OR n:MessageChannel
 DETACH DELETE n
 """
 
@@ -1668,9 +1670,17 @@ SET call.line = row.line, call.condition = row.condition
 UPSERT_PROCESS_STARTS = """
 UNWIND $rows AS row
 MATCH (source:Function {id: row.source_id})
-MATCH (process:WorkflowProcess {process_key: row.process_key})
-MERGE (source)-[starts:STARTS_PROCESS {id: row.id}]->(process)
-SET starts.line = row.line
+MERGE (start:WorkflowStart {id: row.id})
+SET start.process_key = row.process_key, start.line = row.line,
+    start.repo_name = source.repo_name, start.source_file_id = source.source_file_id
+MERGE (source)-[:DECLARES_START]->(start)
+"""
+
+STITCH_WORKFLOW_STARTS = """
+MATCH (source:Function)-[:DECLARES_START]->(start:WorkflowStart)
+MATCH (process:WorkflowProcess {process_key: start.process_key})
+MERGE (source)-[starts:STARTS_PROCESS {id: start.id}]->(process)
+SET starts.line = start.line
 """
 
 UPSERT_MESSAGE_CHANNELS = """
@@ -1823,6 +1833,7 @@ def ingest_files(db: GraphDB, files: list[ParsedFile], settings: Settings = SETT
     process_start_rows = [asdict(start) for item in files for start in item.process_starts]
     if process_start_rows:
         db.execute_write(UPSERT_PROCESS_STARTS, rows=process_start_rows)
+    db.execute_write(STITCH_WORKFLOW_STARTS)
 
     channel_rows_by_id: dict[str, dict[str, Any]] = {}
     message_use_rows: list[dict[str, Any]] = []
