@@ -343,6 +343,28 @@ public class Question {}
         self.assertIn(("DELETE", "/api/questions/{param}"), route_keys)
         self.assertIn("crnk-jsonapi", parsed.frameworks)
 
+    def test_java_inherited_jpa_rest_controller_creates_crud_routes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "CampaignController.java"
+            source.write_text(
+                '''import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+@RestController
+@RequestMapping("${rest.pathPrefix:api}/campaignContent")
+public class CampaignController
+        extends FilterableJpaRestController<Campaign, Long, QCampaign> {}
+''',
+                encoding="utf-8",
+            )
+            parsed = parse_file(source, settings_for(root))
+
+        route_keys = {(route.method, route.normalized_url) for route in parsed.routes}
+        self.assertIn(("GET", "/api/campaignContent"), route_keys)
+        self.assertIn(("POST", "/api/campaignContent"), route_keys)
+        self.assertIn(("DELETE", "/api/campaignContent/{param}"), route_keys)
+        self.assertIn("spring-jpa-rest", parsed.frameworks)
+
     def test_java_vaadin_actions_calls_requests_and_systems(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

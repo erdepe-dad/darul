@@ -925,6 +925,24 @@ def _parse_java(
                 )
             )
 
+    inherited_jpa_rest = re.search(
+        r"\bextends\s+(?:FilterableJpaRestController|JpaRestController)\b",
+        text,
+    )
+    if inherited_jpa_rest and class_prefix:
+        frameworks.append("spring-jpa-rest")
+        for method, suffix in (
+            ("GET", ""), ("POST", ""), ("GET", "/{param}"), ("PUT", "/{param}"),
+            ("PATCH", "/{param}"), ("DELETE", "/{param}"),
+        ):
+            route_path = normalize_url(class_prefix + suffix)
+            routes.append(
+                Route(
+                    f"{repo_name}:{method}:{route_path}", method, route_path, route_path,
+                    line_at(inherited_jpa_rest.start()), None,
+                )
+            )
+
     rest_methods = {
         "getForObject": "GET",
         "getForEntity": "GET",
