@@ -54,21 +54,40 @@ def git_changes(settings: Settings = SETTINGS, base: str = "ORIG_HEAD", head: st
     return changes
 
 
-DELETE_FILE_QUERY = """
+DELETE_FILE_CHILDREN_QUERY = """
 MATCH (n {repo_name: $repo_name, source_file_id: $file_id})
 WHERE n:Class OR n:Function OR n:Page OR n:APIEndpoint OR n:BackendRoute
    OR n:WorkflowProcess OR n:WorkflowStep OR n:UIAction OR n:ExternalSystem OR n:MessageChannel
 DETACH DELETE n
-WITH count(*) AS ignored
+"""
+
+DELETE_DIRECT_CHILDREN_QUERY = """
+MATCH (f:CodeFile {id: $file_id})-[:DEFINES|CONTAINS]->(child)
+DETACH DELETE child
+"""
+
+DELETE_FILE_NODE_QUERY = """
 MATCH (f:CodeFile {id: $file_id})
 DETACH DELETE f
 """
 
 
-def delete_file(db: GraphDB, rel_path: str, settings: Settings = SETTINGS) -> None:
+def clear_file_children(db: GraphDB, rel_path: str, settings: Settings = SETTINGS) -> None:
+    parameters = {
+        "repo_name": settings.repo_name,
+        "file_id": f"{settings.repo_name}:{rel_path}",
+    }
     db.execute_write(
-        DELETE_FILE_QUERY,
-        repo_name=settings.repo_name,
+        DELETE_FILE_CHILDREN_QUERY,
+        **parameters,
+    )
+    db.execute_write(DELETE_DIRECT_CHILDREN_QUERY, **parameters)
+
+
+def delete_file(db: GraphDB, rel_path: str, settings: Settings = SETTINGS) -> None:
+    clear_file_children(db, rel_path, settings)
+    db.execute_write(
+        DELETE_FILE_NODE_QUERY,
         file_id=f"{settings.repo_name}:{rel_path}",
     )
 
@@ -110,7 +129,7 @@ def sync_changes(
             continue
         try:
             parsed = parse_file(source_path, settings)
-            delete_file(db, change.path, settings)
+            clear_file_children(db, change.path, settings)
             ingest_files(db, [parsed], settings)
             result.added_or_modified.append(change.path)
         except (OSError, SyntaxError, UnicodeError, ValueError) as exc:

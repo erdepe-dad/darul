@@ -44,8 +44,12 @@ class SyncTests(unittest.TestCase):
 
         self.assertEqual(result.added_or_modified, ["app.py"])
         self.assertEqual(result.deleted, ["removed.ts"])
-        deleted_ids = [parameters.get("file_id") for _, parameters in db.calls if "file_id" in parameters]
-        self.assertEqual(deleted_ids, ["repo:app.py", "repo:removed.ts"])
+        deleted_file_ids = [
+            parameters.get("file_id")
+            for query, parameters in db.calls
+            if "DETACH DELETE f" in query
+        ]
+        self.assertEqual(deleted_file_ids, ["repo:removed.ts"])
 
     def test_sync_skips_excluded_directories_and_removes_stale_nodes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -62,8 +66,12 @@ class SyncTests(unittest.TestCase):
 
         self.assertEqual(result.added_or_modified, [])
         self.assertEqual(result.skipped, [".graph_engine/parser.py"])
-        deleted_ids = [parameters.get("file_id") for _, parameters in db.calls if "file_id" in parameters]
-        self.assertEqual(deleted_ids, ["repo:.graph_engine/parser.py"])
+        deleted_file_ids = [
+            parameters.get("file_id")
+            for query, parameters in db.calls
+            if "DETACH DELETE f" in query
+        ]
+        self.assertEqual(deleted_file_ids, ["repo:.graph_engine/parser.py"])
 
 
 if __name__ == "__main__":
