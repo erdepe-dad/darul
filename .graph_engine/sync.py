@@ -108,7 +108,7 @@ def sync_changes(
     started = time.monotonic()
     result = SyncResult()
     for change in changes if changes is not None else git_changes(settings, base, head):
-        if change.old_path and change.old_path != change.path:
+        if change.status == "R" and change.old_path and change.old_path != change.path:
             delete_file(db, change.old_path, settings)
             result.deleted.append(change.old_path)
         if _is_excluded(change.path, settings):

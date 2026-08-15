@@ -27,9 +27,12 @@ def settings_for(root: Path, excludes: frozenset[str] = frozenset()) -> Settings
 class SyncTests(unittest.TestCase):
     @patch("graph_engine.sync.subprocess.run")
     def test_git_changes_handles_renames(self, run) -> None:
-        run.return_value.stdout = "M\tsrc/app.py\nD\told.py\nR100\tbefore.ts\tafter.ts\n"
+        run.return_value.stdout = (
+            "M\tsrc/app.py\nD\told.py\nR100\tbefore.ts\tafter.ts\nC100\tsource.ts\tcopy.ts\n"
+        )
         changes = git_changes(settings_for(Path.cwd()))
         self.assertEqual(changes[2], Change("R", "after.ts", "before.ts"))
+        self.assertEqual(changes[3], Change("C", "copy.ts", "source.ts"))
 
     def test_sync_replaces_only_changed_subtrees(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -80,6 +83,26 @@ class SyncTests(unittest.TestCase):
             if "DETACH DELETE f" in query
         ]
         self.assertEqual(deleted_file_ids, ["repo:.graph_engine/parser.py"])
+
+    def test_sync_copy_keeps_original_file_node(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "copy.py").write_text("def copied():\n    return 1\n", encoding="utf-8")
+            db = FakeDB()
+            result = sync_changes(
+                db,
+                settings_for(root),
+                changes=[Change("C", "copy.py", "original.py")],
+            )
+
+        self.assertEqual(result.added_or_modified, ["copy.py"])
+        self.assertEqual(result.deleted, [])
+        deleted_file_ids = [
+            parameters.get("file_id")
+            for query, parameters in db.calls
+            if "DETACH DELETE f" in query
+        ]
+        self.assertEqual(deleted_file_ids, [])
 
 
 if __name__ == "__main__":
