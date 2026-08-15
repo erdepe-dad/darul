@@ -269,6 +269,31 @@ public class Metadata {
 
         self.assertEqual(parsed.requests, [])
 
+    def test_java_commented_requests_are_ignored(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "RemoteResourceClient.java"
+            source.write_text(
+                '''import org.springframework.web.client.RestTemplate;
+public class RemoteResourceClient {
+    RestTemplate restTemplate;
+    String getServiceUrl() { return baseUrl + "/api/surveys"; }
+    void deleteSurvey(String id) {
+        UriComponentsBuilder builder = UriComponentsBuilder.fromHttpUrl(getServiceUrl())
+            .path("/delete/" + id);
+        restTemplate.delete(builder.build().toString());
+        // findMany(builder.build().toString());
+        // restTemplate.delete("http://localhost/api/surveys/delete/" + id);
+    }
+}
+''',
+                encoding="utf-8",
+            )
+            parsed = parse_file(source, settings_for(root))
+
+        requests = [(request.method, request.normalized_url) for request in parsed.requests]
+        self.assertEqual(requests, [("DELETE", "/api/surveys/delete/{param}")])
+
     def test_java_vaadin_8_spring_view_and_exchange_variable(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

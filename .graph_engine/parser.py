@@ -711,6 +711,48 @@ def _java_expression_url(expression: str) -> str | None:
     return path if path.startswith("/") else "/" + path
 
 
+def _mask_java_comments(text: str) -> str:
+    """Replace Java comments with spaces while preserving strings, offsets, and newlines."""
+    chars = list(text)
+    index = 0
+    quote = ""
+    escaped = False
+    while index < len(chars):
+        char = chars[index]
+        if quote:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = ""
+            index += 1
+            continue
+        if char in {'"', "'"}:
+            quote = char
+            index += 1
+            continue
+        if char == "/" and index + 1 < len(chars) and chars[index + 1] == "/":
+            while index < len(chars) and chars[index] not in "\r\n":
+                chars[index] = " "
+                index += 1
+            continue
+        if char == "/" and index + 1 < len(chars) and chars[index + 1] == "*":
+            chars[index] = chars[index + 1] = " "
+            index += 2
+            while index < len(chars):
+                if chars[index] == "*" and index + 1 < len(chars) and chars[index + 1] == "/":
+                    chars[index] = chars[index + 1] = " "
+                    index += 2
+                    break
+                if chars[index] not in "\r\n":
+                    chars[index] = " "
+                index += 1
+            continue
+        index += 1
+    return "".join(chars)
+
+
 def _spring_view_route(text: str) -> str | None:
     match = JAVA_SPRING_VIEW_RE.search(text)
     if not match:
@@ -953,21 +995,22 @@ def _parse_java(
         "delete": "DELETE",
     }
     if "RestTemplate" in text or "restTemplate" in text:
-        service_base = _java_service_base_url(text)
+        request_text = _mask_java_comments(text)
+        service_base = _java_service_base_url(request_text)
         rest_template_names = set(
-            re.findall(r"\bRestTemplate\s+([A-Za-z_$][\w$]*)", text)
+            re.findall(r"\bRestTemplate\s+([A-Za-z_$][\w$]*)", request_text)
         )
-        for match in JAVA_REST_TEMPLATE_RE.finditer(text):
+        for match in JAVA_REST_TEMPLATE_RE.finditer(request_text):
             receiver, operation, url = match.groups()
             if receiver in rest_template_names:
                 add_request(rest_methods[operation], url, match.start())
         assignments: dict[str, list[tuple[int, str, str]]] = {}
-        for assignment in JAVA_STRING_ASSIGNMENT_RE.finditer(text):
+        for assignment in JAVA_STRING_ASSIGNMENT_RE.finditer(request_text):
             if url := _java_expression_url(assignment.group(2)):
                 assignments.setdefault(assignment.group(1), []).append(
-                    (assignment.start(), url, _java_system_hint(assignment.group(2), text))
+                    (assignment.start(), url, _java_system_hint(assignment.group(2), request_text))
                 )
-        for match in JAVA_REST_TEMPLATE_FACTORY_RE.finditer(text):
+        for match in JAVA_REST_TEMPLATE_FACTORY_RE.finditer(request_text):
             operation, url_argument = match.groups()
             if url_argument.startswith('"'):
                 add_request(rest_methods[operation], url_argument.strip('"'), match.start())
@@ -975,7 +1018,7 @@ def _parse_java(
             candidates = [item for item in assignments.get(url_argument, []) if item[0] < match.start()]
             if candidates:
                 add_request(rest_methods[operation], candidates[-1][1], match.start(), candidates[-1][2])
-        for match in JAVA_EXCHANGE_RE.finditer(text):
+        for match in JAVA_EXCHANGE_RE.finditer(request_text):
             url_argument, method = match.groups()
             system = ""
             if url_argument.startswith('"'):
@@ -985,24 +1028,24 @@ def _parse_java(
                 url = candidates[-1][1] if candidates else None
                 system = candidates[-1][2] if candidates else ""
             if url:
-                if service_base and url.startswith("/") and "getServiceUrl" in text[max(0, match.start() - 1800):match.start()]:
+                if service_base and url.startswith("/") and "getServiceUrl" in request_text[max(0, match.start() - 1800):match.start()]:
                     url = service_base.rstrip("/") + url
                 add_request(method, url, match.start(), system)
         if service_base:
             service_system = _java_system_hint(
                 re.search(
                     r"\bString\s+getServiceUrl\s*\([^)]*\)\s*\{.*?\breturn\s+(.*?);",
-                    text,
+                    request_text,
                     re.DOTALL,
                 ).group(1),
-                text,
+                request_text,
             )
-            for match in re.finditer(r"\b(findMany|findOne)\s*\(", text):
-                path = _java_builder_path(text, match.start())
+            for match in re.finditer(r"\b(findMany|findOne)\s*\(", request_text):
+                path = _java_builder_path(request_text, match.start())
                 add_request("GET", service_base.rstrip("/") + path, match.start(), service_system)
             for operation, method in (("postForObject", "POST"), ("postForEntity", "POST"), ("delete", "DELETE")):
-                for match in re.finditer(rf"\b[A-Za-z_$][\w$]*\s*\.{operation}\s*\(", text):
-                    path = _java_builder_path(text, match.start())
+                for match in re.finditer(rf"\b[A-Za-z_$][\w$]*\s*\.{operation}\s*\(", request_text):
+                    path = _java_builder_path(request_text, match.start())
                     add_request(method, service_base.rstrip("/") + path, match.start(), service_system)
     if "WebClient" in text:
         for match in JAVA_WEBCLIENT_RE.finditer(text):
