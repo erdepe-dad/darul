@@ -1721,17 +1721,43 @@ MERGE (b)-[:SAME_CHANNEL]->(a)
 """
 
 STITCH_WORKFLOW_BINDINGS = """
-MATCH (s:WorkflowStep {repo_name: $repo_name})
+OPTIONAL MATCH (:WorkflowStep)-[old:INVOKES]->(:Class)
+WITH collect(old) AS old_relationships
+FOREACH (relationship IN old_relationships | DELETE relationship)
+WITH 1 AS ready
+MATCH (s:WorkflowStep)
 UNWIND s.bindings AS binding
-MATCH (c:Class {repo_name: $repo_name})
+MATCH (c:Class)
 WHERE binding = c.qualified_name OR binding IN c.aliases
+WITH s, binding, collect(DISTINCT c) AS candidates
+WITH s, candidates,
+     [candidate IN candidates WHERE candidate.repo_name = s.repo_name] AS local_candidates
+WITH s, CASE
+    WHEN size(local_candidates) > 0 THEN local_candidates
+    WHEN size(candidates) = 1 THEN candidates
+    ELSE []
+END AS selected
+UNWIND selected AS c
 MERGE (s)-[:INVOKES]->(c)
 """
 
 STITCH_CALLED_PROCESSES = """
-MATCH (s:WorkflowStep {repo_name: $repo_name})
+OPTIONAL MATCH (s:WorkflowStep)-[old:CALLS]->(:WorkflowProcess)
+WITH collect(old) AS old_relationships
+FOREACH (relationship IN old_relationships | DELETE relationship)
+WITH 1 AS ready
+MATCH (s:WorkflowStep)
 WHERE s.called_process <> ''
-MATCH (p:WorkflowProcess {repo_name: $repo_name, process_key: s.called_process})
+MATCH (p:WorkflowProcess {process_key: s.called_process})
+WITH s, collect(DISTINCT p) AS candidates
+WITH s, candidates,
+     [candidate IN candidates WHERE candidate.repo_name = s.repo_name] AS local_candidates
+WITH s, CASE
+    WHEN size(local_candidates) > 0 THEN local_candidates
+    WHEN size(candidates) = 1 THEN candidates
+    ELSE []
+END AS selected
+UNWIND selected AS p
 MERGE (s)-[:CALLS]->(p)
 """
 
@@ -1877,9 +1903,8 @@ def ingest_files(db: GraphDB, files: list[ParsedFile], settings: Settings = SETT
         if binding_rows:
             db.execute_write(UPSERT_MESSAGE_BINDINGS, rows=binding_rows)
         db.execute_write(STITCH_MESSAGE_CHANNELS)
-    if step_rows:
-        db.execute_write(STITCH_WORKFLOW_BINDINGS, repo_name=settings.repo_name)
-        db.execute_write(STITCH_CALLED_PROCESSES, repo_name=settings.repo_name)
+    db.execute_write(STITCH_WORKFLOW_BINDINGS)
+    db.execute_write(STITCH_CALLED_PROCESSES)
     classes_by_name = {
         symbol.qualified_name: symbol.id
         for item in files

@@ -82,6 +82,33 @@ public class FlowService {
             )
         )
 
+    def test_workflow_reconciliation_runs_when_only_a_java_worker_is_ingested(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "ApprovalWorker.java"
+            source.write_text(
+                '''public class ApprovalWorker {
+    public void execute() {}
+}
+''',
+                encoding="utf-8",
+            )
+            settings = Settings(root, "worker-repo", "bolt://unused", "neo4j", "x", None, 1.0, frozenset())
+            parsed = parse_file(source, settings)
+            db = FakeDB()
+
+            ingest_files(db, [parsed], settings)
+
+        binding_query = next(query for query, _ in db.calls if "old:INVOKES" in query)
+        called_process_query = next(
+            query for query, _ in db.calls
+            if "old:CALLS" in query and "called_process" in query
+        )
+        self.assertNotIn("$repo_name", binding_query)
+        self.assertIn("size(candidates) = 1", binding_query)
+        self.assertNotIn("$repo_name", called_process_query)
+        self.assertIn("size(candidates) = 1", called_process_query)
+
 
 if __name__ == "__main__":
     unittest.main()
