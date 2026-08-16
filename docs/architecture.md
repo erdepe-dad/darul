@@ -151,6 +151,7 @@ OBSERVED source facts -> SUGGESTED connection -> VALIDATED or REJECTED
 source repository + service key -> target repository + path prefix
 ```
 
+For example, an operator may validate `sample-web:BACKEND_API_URL -> sample-api:/api`. Darul then derives the compatible endpoint links covered by that rule while retaining endpoint-level exceptions.
 
 Durable assertions will belong in a version-controlled `.darul/validations.yaml` file. Neo4j stores their projected nodes and relationships for traversal, including validator, timestamp, rationale, source revision, target revision, rule scope, and evidence fingerprint. A changed fingerprint marks the projection `STALE`; it does not silently reapprove the new evidence.
 

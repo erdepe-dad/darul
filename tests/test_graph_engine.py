@@ -96,11 +96,11 @@ class NormalizationTests(unittest.TestCase):
             "BACKEND_API_URL",
             "http://127.0.0.1:10000/api/",
             repo_name="sample-web",
-            target_repo="admin-rest",
+            target_repo="sample-api",
         )
 
         self.assertEqual(service["path_prefix"], "/api")
-        self.assertEqual(service["target_repo"], "admin-rest")
+        self.assertEqual(service["target_repo"], "sample-api")
         self.assertEqual(service_path_prefix("http://service.test"), "")
 
 

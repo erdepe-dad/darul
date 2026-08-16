@@ -11,6 +11,7 @@ The baseline is intentionally retained so future parser improvements can be comp
 | Date | 2026-08-15 UTC |
 | Darul commit | `f6ed465` |
 | Workload | Multi-repository Java/Vaadin behavioral trace |
+| Seed view | `ExampleTaskView` |
 | Graph size returned | 63 nodes, 83 links, 14 alternatives |
 | Codex CLI | `0.147.0` |
 | Model | `cx/gpt-5.6-sol` through the locally configured provider |
@@ -20,6 +21,7 @@ The baseline is intentionally retained so future parser improvements can be comp
 
 The identical question in both runs was:
 
+> Explain the end-to-end behavior of `ExampleTaskView`: user actions, service calls, HTTP endpoints/backend routes, and unresolved edges. Cite class and method names.
 
 ## Test Modes
 
@@ -111,6 +113,7 @@ Generate the compact graph context:
 
 ```bash
 export CURRENT_REPO_NAME="repository-a"
+export BENCHMARK_VIEW="ExampleTaskView"
 export BENCHMARK_MODEL="your-model-id"
 
 .venv/bin/python3 -m graph_engine.cli trace \

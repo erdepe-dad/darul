@@ -126,6 +126,7 @@ scripts/rotate-neo4j-password.sh
 .venv/bin/python3 -m graph_engine.cli inspect --page src/pages/checkout.tsx
 
 # Trace a Vaadin view or Java entry point through calls, HTTP, messaging, and Flowable.
+.venv/bin/python3 -m graph_engine.cli trace --view ExampleTaskView
 
 # Report repository-wide observed service and infrastructure boundaries without Neo4j.
 .venv/bin/python3 -m graph_engine.cli boundaries
@@ -133,7 +134,10 @@ scripts/rotate-neo4j-password.sh
 
 # Persist runtime service URLs used to resolve configuration-key-based requests.
 .venv/bin/python3 -m graph_engine.cli services set \
-  --base-url http://127.0.0.1:10000/api --target-repo admin-rest
+  --repo sample-web --key BACKEND_API_URL \
+  --base-url http://127.0.0.1:10000/api --target-repo sample-api
+.venv/bin/python3 -m graph_engine.cli services list --repo sample-web
+.venv/bin/python3 -m graph_engine.cli services clear --repo sample-web --key BACKEND_API_URL
 
 # Record an architectural decision and optionally supersede an earlier decision.
 .venv/bin/python3 -m graph_engine.cli decision \

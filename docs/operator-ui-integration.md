@@ -94,6 +94,7 @@ Start Darul:
 
 ```bash
 export DARUL_OPERATOR_TOKEN='replace-with-a-random-token'
+export DARUL_REPO_ROOTS='sample-web=/srv/sample-web,sample-api=/srv/sample-api'
 .venv/bin/python3 -m graph_engine.cli visualize --host 127.0.0.1 --port 38533
 ```
 

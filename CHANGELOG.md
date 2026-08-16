@@ -19,6 +19,7 @@ All notable changes to Darul are documented here.
 
 ### Changed
 
+- Public examples and milestone evidence use synthetic repository names and omit private ingestion metrics
 - Automatic endpoint matches are marked `SUGGESTED` and no longer count as resolved topology
 - Default coding-agent context includes backend route connections only when they are `VALIDATED`
 - Operator metrics expose candidate counts separately from validated coverage

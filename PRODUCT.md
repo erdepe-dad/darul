@@ -38,6 +38,7 @@ The atlas runs from the same repository as the parser and connects through the e
 - `REJECTED`: a reviewed candidate that must not be proposed again unless its evidence materially changes.
 - `STALE`: a previous validation whose source evidence or mapping inputs have changed.
 
+Human validation normally applies to a service boundary, such as `sample-web:BACKEND_API_URL -> sample-api:/api`, and deterministically covers compatible endpoints beneath it. Endpoint-level exceptions remain possible.
 
 ## LLM Safety Boundary
 
