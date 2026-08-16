@@ -13,7 +13,7 @@ PARAMETER_PATTERNS = (
     re.compile(r"\$\{[^}/]+\}"),
     re.compile(r"(?<=/):[^/]+"),
     re.compile(r"\{[^}/]+\}"),
-    re.compile(r"\[[^]/]+\]"),
+    re.compile(r"\[\[?[^]/]+\]\]?"),
 )
 
 
@@ -38,7 +38,12 @@ def normalize_url(url: str) -> str:
 
 STITCH_QUERY = """
 MATCH (a:APIEndpoint)
-MATCH (b:BackendRoute {normalized_url: a.normalized_url, method: a.method})
+MATCH (b:BackendRoute {method: a.method})
+WHERE b.normalized_url = a.normalized_url
+   OR ((b.route_path CONTAINS '[...' OR b.route_path CONTAINS '[[...')
+       AND b.repo_name = a.repo_name
+       AND (a.normalized_url = split(b.route_path, '/[')[0]
+            OR a.normalized_url STARTS WITH split(b.route_path, '/[')[0] + '/'))
 MERGE (a)-[st:TARGETS_ROUTE]->(b)
 ON CREATE SET st.created_at = datetime()
 SET st.managed_by = 'stitcher', st.resolution = 'exact',
@@ -59,8 +64,12 @@ RETURN a.id AS request_id, a.method AS method,
 STITCH_MAPPED_QUERY = """
 UNWIND $rows AS row
 MATCH (a:APIEndpoint {id: row.request_id})
-MATCH (b:BackendRoute {normalized_url: row.normalized_url, method: row.method})
-WHERE row.target_repo = '' OR b.repo_name = row.target_repo
+MATCH (b:BackendRoute {method: row.method})
+WHERE (b.normalized_url = row.normalized_url
+       OR ((b.route_path CONTAINS '[...' OR b.route_path CONTAINS '[[...')
+           AND (row.normalized_url = split(b.route_path, '/[')[0]
+                OR row.normalized_url STARTS WITH split(b.route_path, '/[')[0] + '/')))
+  AND (row.target_repo = '' OR b.repo_name = row.target_repo)
 MERGE (a)-[st:TARGETS_ROUTE]->(b)
 ON CREATE SET st.created_at = datetime()
 SET st.managed_by = 'stitcher', st.resolution = 'configured-prefix',

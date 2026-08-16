@@ -25,20 +25,23 @@ from .stitcher import normalize_url
 
 
 SOURCE_EXTENSIONS = frozenset({".py", ".js", ".jsx", ".ts", ".tsx", ".go", ".java", ".bpmn"})
-EVIDENCE_EXTENSIONS = frozenset({".properties", ".yml", ".yaml", ".toml", ".gradle", ".conf"})
+EVIDENCE_EXTENSIONS = frozenset({
+    ".properties", ".yml", ".yaml", ".toml", ".gradle", ".conf", ".prisma", ".sql",
+})
 EVIDENCE_FILE_NAMES = frozenset({
     "pom.xml", "build.gradle.kts", "package.json", "requirements.txt", "pyproject.toml",
     "go.mod", "compose.yaml", "compose.yml", "docker-compose.yaml", "docker-compose.yml",
 })
 SYSTEM_EVIDENCE_HINTS = (
-    "http://", "https://", "jdbc:", "postgres", "mysql", "mariadb", "oracle",
+    "http://", "https://", "jdbc:", "postgres", "psycopg", "asyncpg", "pg_trgm", "jsonb",
+    "mysql", "mariadb", "oracle",
     "sqlserver", "mongodb", "neo4j", "redis", "@cache", "cachemanager", "kafka",
     "rabbit", "jms", "pulsar", "elastic", "opensearch", "amazons3", "awssdk", "s3client", "minio",
     "javamailsender", "jakarta.mail", "javax.mail", "spring.mail", "smtp", "sendgrid", "mailgun", "sesclient", "whatsapp", "twilio", "stripe",
     "midtrans", "xendit", "paypal", "adyen", "doku", "espay", "keycloak", "flowable",
 )
 SYSTEM_TECH_HINTS = {
-    "postgresql": ("postgres", "jdbc:postgresql"),
+    "postgresql": ("postgres", "jdbc:postgresql", "psycopg", "asyncpg", "pg_trgm", "jsonb"),
     "mysql": ("mysql",),
     "mariadb": ("mariadb",),
     "oracle": ("oracle", "ojdbc"),
@@ -343,7 +346,11 @@ def _parse_system_dependencies(
         add("email", "smtp", "email", host_match, identity)
 
     patterns = (
-        ("database", "postgresql", "database", r"jdbc:postgresql|postgres(?:ql)?-jdbc|org\.postgresql|\bpostgresql\b"),
+        (
+            "database", "postgresql", "database",
+            r"jdbc:postgresql|postgres(?:ql)?-jdbc|org\.postgresql|\bpostgresql\b|"
+            r"\bpsycopg(?:2)?\b|\basyncpg\b|\bpg_trgm\b|\btsvector\b|\bjsonb\b",
+        ),
         ("database", "mysql", "database", r"jdbc:mysql|mysql-connector|com\.mysql\.cj|com\.mysql\.jdbc"),
         ("database", "mariadb", "database", r"jdbc:mariadb|mariadb-java-client|org\.mariadb"),
         ("database", "oracle", "database", r"jdbc:oracle|\bojdbc\d*\b|oracle\.jdbc"),
@@ -386,20 +393,22 @@ def _parse_system_dependencies(
                 add(kind, technology, role, match)
 
     redis_roles = (
-        ("cache", r"spring\.cache[^\n=]*[:=]\s*redis|RedisCacheManager"),
-        ("session", r"spring\.session[^\n=]*[:=]\s*redis|RedisIndexedSessionRepository"),
-        ("pubsub", r"RedisListener|convertAndSend\s*\("),
+        ("cache", "cache", r"spring\.cache[^\n=]*[:=]\s*redis|RedisCacheManager"),
+        ("cache", "session", r"spring\.session[^\n=]*[:=]\s*redis|RedisIndexedSessionRepository"),
+        ("messaging", "pubsub", r"RedisListener|convertAndSend\s*\("),
+        ("messaging", "queue", r"\.(?:rpush|lpush|lpop|rpop|blpop|brpop)\s*\("),
         (
-            "datastore",
+            "cache", "datastore",
             r"StringRedisTemplate|spring\.(?:data\.)?redis|"
+            r"\bRedis\.from_url\s*\(|\bfrom\s+redis\s+import\s+Redis\b|"
             r"opsFor(?:Value|Hash|List|Set|ZSet|Geo|HyperLogLog)|"
             r"bound(?:Value|Hash|List|Set|ZSet)Ops",
         ),
     )
     if "redis" in lower_text or "@cache" in lower_text:
-        for role, pattern in redis_roles:
+        for kind, role, pattern in redis_roles:
             if match := re.search(pattern, text, re.IGNORECASE):
-                add("cache", "redis", role, match)
+                add(kind, "redis", role, match)
 
     if extension in SOURCE_EXTENSIONS or extension in {".properties", ".yml", ".yaml", ".conf"}:
         ignored_hosts = {
@@ -627,6 +636,23 @@ JS_ROUTE_RE = re.compile(
     r"\b(?:app|router|server)\s*\.\s*(get|post|put|patch|delete|options|head)\s*\(\s*([`'\"])(.*?)\2\s*(?:,\s*([A-Za-z_$][\w$]*))?",
     re.IGNORECASE | re.DOTALL,
 )
+JS_HTTP_CLIENT_RE = re.compile(
+    r"\b(?:api|apiClient|httpClient)\s*\.\s*"
+    r"(get|post|put|patch|delete|options|head)\s*"
+    r"(?:<.{0,600}?>\s*)?\(\s*([`'\"])(/api(?:/.*?)?)\2",
+    re.IGNORECASE | re.DOTALL,
+)
+NEXT_ROUTE_FUNCTION_RE = re.compile(
+    r"\bexport\s+(?:async\s+)?function\s+(GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD)\s*\(",
+    re.IGNORECASE,
+)
+NEXT_ROUTE_CONST_RE = re.compile(
+    r"\bexport\s+const\s+(GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD)\s*=",
+    re.IGNORECASE,
+)
+NEXT_ROUTE_DESTRUCTURE_RE = re.compile(r"\bexport\s+const\s*\{([^}]+)\}\s*=", re.DOTALL)
+NEXT_ROUTE_EXPORT_RE = re.compile(r"\bexport\s*\{([^}]+)\}", re.DOTALL)
+NEXT_ROUTE_FILE_NAMES = frozenset({"route.js", "route.jsx", "route.ts", "route.tsx"})
 GO_FUNCTION_RE = re.compile(r"(?m)^\s*func\s+(?:\([^)]*\)\s*)?([A-Za-z_]\w*)\s*\(([^)]*)\)")
 GO_STRUCT_RE = re.compile(r"(?m)^\s*type\s+([A-Za-z_]\w*)\s+struct\s*\{")
 GO_IMPORT_RE = re.compile(r"(?m)^\s*import\s+(?:\w+\s+)?\"([^\"]+)\"")
@@ -847,7 +873,69 @@ def _java_system_hint(expression: str, text: str) -> str:
 
 
 def _template_url(value: str) -> str:
+    # Query-builder expressions do not change the route path. Nested template
+    # literals are often truncated by the lightweight call regex at their first backtick.
+    value = re.sub(r"\$\{[^}]*(?:query|suffix)[^}]*\}", "", value, flags=re.IGNORECASE)
+    dynamic_start = value.find("${")
+    if dynamic_start >= 0:
+        remainder = value[dynamic_start + 2:]
+        if "?" in remainder and re.match(r"(?:q|query|suffix)\b", remainder.strip(), re.IGNORECASE):
+            value = value[:dynamic_start]
     return re.sub(r"\$\{[^}]+\}", "{param}", value)
+
+
+def _nextjs_route_path(rel_path: str) -> str | None:
+    parts = Path(rel_path).parts
+    if not parts or parts[-1].lower() not in NEXT_ROUTE_FILE_NAMES:
+        return None
+    app_index = next(
+        (index for index in range(len(parts) - 1) if parts[index:index + 2] == ("src", "app")),
+        None,
+    )
+    if app_index is None:
+        return None
+    segments = [
+        segment
+        for segment in parts[app_index + 2:-1]
+        if not (segment.startswith("(") and segment.endswith(")"))
+        and not segment.startswith("@")
+    ]
+    return "/" + "/".join(segments) if segments else "/"
+
+
+def _nextjs_routes(
+    text: str, repo_name: str, rel_path: str, functions: list[Symbol],
+) -> list[Route]:
+    route_path = _nextjs_route_path(rel_path)
+    if route_path is None:
+        return []
+    function_names = {function.name for function in functions}
+    methods: dict[str, tuple[int, str | None]] = {}
+    for match in NEXT_ROUTE_FUNCTION_RE.finditer(text):
+        method = match.group(1).upper()
+        handler_id = _entity_id(repo_name, rel_path, method) if method in function_names else None
+        methods.setdefault(method, (match.start(), handler_id))
+    for match in NEXT_ROUTE_CONST_RE.finditer(text):
+        method = match.group(1).upper()
+        handler_id = _entity_id(repo_name, rel_path, method) if method in function_names else None
+        methods.setdefault(method, (match.start(), handler_id))
+    for export_re in (NEXT_ROUTE_DESTRUCTURE_RE, NEXT_ROUTE_EXPORT_RE):
+        for match in export_re.finditer(text):
+            for item in match.group(1).split(","):
+                method = re.split(r"\s+as\s+", item.strip(), flags=re.IGNORECASE)[-1].strip().upper()
+                if method in {"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"}:
+                    methods.setdefault(method, (match.start(), None))
+    return [
+        Route(
+            f"{repo_name}:{method}:{normalize_url(route_path)}",
+            method,
+            route_path,
+            normalize_url(route_path),
+            _line_number(text, offset),
+            handler_id,
+        )
+        for method, (offset, handler_id) in sorted(methods.items(), key=lambda item: item[1][0])
+    ]
 
 
 def _parse_javascript(text: str, repo_name: str, rel_path: str) -> tuple[list[str], list[Symbol], list[Symbol], list[APIRequest], list[Route]]:
@@ -902,6 +990,8 @@ def _parse_javascript(text: str, repo_name: str, rel_path: str) -> tuple[list[st
         if url_match:
             method_match = re.search(r"\bmethod\s*:\s*['\"]([A-Za-z]+)['\"]", config)
             add_request(method_match.group(1) if method_match else "GET", url_match.group(2), match.start())
+    for match in JS_HTTP_CLIENT_RE.finditer(text):
+        add_request(match.group(1), match.group(3), match.start())
 
     routes: list[Route] = []
     for match in JS_ROUTE_RE.finditer(text):
@@ -918,6 +1008,7 @@ def _parse_javascript(text: str, repo_name: str, rel_path: str) -> tuple[list[st
                 _entity_id(repo_name, rel_path, handler) if handler else None,
             )
         )
+    routes.extend(_nextjs_routes(text, repo_name, rel_path, functions))
     return imports, classes, functions, requests, routes
 
 
@@ -1071,8 +1162,20 @@ def _mask_python_comments(text: str) -> str:
 def _mask_evidence_comments(text: str, extension: str) -> str:
     if extension == ".py":
         return _mask_python_comments(text)
-    if extension in {".java", ".js", ".jsx", ".ts", ".tsx", ".go"}:
+    if extension in {".java", ".js", ".jsx", ".ts", ".tsx", ".go", ".prisma"}:
         return _mask_java_comments(text)
+    if extension == ".sql":
+        masked = re.sub(
+            r"/\*.*?(?:\*/|\Z)",
+            lambda match: NON_NEWLINE_RE.sub(" ", match.group(0)),
+            text,
+            flags=re.DOTALL,
+        )
+        return re.sub(
+            r"(?m)--[^\r\n]*$",
+            lambda match: " " * len(match.group(0)),
+            masked,
+        )
     masked = re.sub(
         r"<!--.*?-->",
         lambda match: NON_NEWLINE_RE.sub(" ", match.group(0)),
@@ -1847,8 +1950,12 @@ def parse_file(path: Path, settings: Settings = SETTINGS) -> ParsedFile:
     if extension not in {".java", ".bpmn", ".bpmn20.xml"} and not (
         extension in EVIDENCE_EXTENSIONS or resolved.name.lower() in EVIDENCE_FILE_NAMES
     ):
-        route_path = infer_page_route(rel_path)
-        frameworks = []
+        is_nextjs_route = (
+            extension in {".js", ".jsx", ".ts", ".tsx"}
+            and _nextjs_route_path(rel_path) is not None
+        )
+        route_path = None if is_nextjs_route else infer_page_route(rel_path)
+        frameworks = ["nextjs"] if is_nextjs_route else []
         workflow_refs = []
     if extension not in {".bpmn", ".bpmn20.xml"}:
         workflow_processes, workflow_steps, workflow_flows = [], [], []

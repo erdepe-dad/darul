@@ -9,6 +9,8 @@ All notable changes to Darul are documented here.
 - Evidence-true `boundaries` CLI report for repository-wide HTTP services and surrounding systems
 - Source/configuration detection for databases, caches, messaging, workflow, storage, search, email, identity, communications, payment gateways, and literal HTTP host-and-port boundaries
 - File-owned `USES_SYSTEM` graph evidence with technology, role, scope, line, and safe configuration-key provenance
+- Next.js App Router backend routes, literal same-origin API-client requests, and catch-all route candidates
+- Prisma/SQL evidence files plus Python psycopg and Redis queue/datastore detection
 
 ### Changed
 
@@ -17,6 +19,7 @@ All notable changes to Darul are documented here.
 - Operator metrics expose candidate counts separately from validated coverage
 - Dynamic Java receiver names are no longer promoted to service identities
 - Split SMTP host and port properties are combined into one safe observed destination identity
+- Next.js optional catch-all parameters and dynamic query suffixes normalize without corrupting route paths
 
 ## 0.1.0 - 2026-08-14
 

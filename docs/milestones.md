@@ -45,6 +45,7 @@ Secrets must never be stored or emitted. Configuration evidence records keys, sc
 5. Scanning a literal external URL reports its hostname or declared system identity even when it does not use a recognized HTTP client wrapper.
 6. False-positive service identities are rejected by fixtures and representative-repository checks.
 7. The repository system-boundary report is deterministic, contains no secrets, and clearly separates observed evidence from unresolved values and suggested matches.
+8. Scanning a monorepo preserves frontend, backend, worker, database, and infrastructure evidence instead of treating the repository as a frontend-only application.
 
 ### Current audit: 2026-08-16
 
@@ -61,7 +62,8 @@ Status: **COMPLETE**
 | Source provenance | Pass | Boundary evidence retains source file, line, scope, safe configuration key, and function ownership where available |
 | Repository-wide boundary report | Pass | `graph_engine.cli boundaries` emits bounded text or complete JSON without contacting Neo4j |
 | Non-speculative cross-repository output | Pass | The rebuilt graph contains 312 `SUGGESTED` route candidates, zero validated routes, and operator coverage correctly reports 0 resolved of 805 requests |
-| Representative parser tests | Pass | All 75 unit tests pass, including database, cache, messaging-role, literal-host, local-port, provider, secret-redaction, false-positive, and trust-boundary fixtures |
+| Next.js handler provenance | Pass | 38 of 40 routes link directly to exported handler functions; two imported NextAuth destructured handlers remain explicit provenance gaps rather than fabricated functions |
+| Representative parser tests | Pass | All 80 unit tests pass, including database, cache, messaging-role, literal-host, local-port, provider, Next.js, Prisma/SQL, Python worker, secret-redaction, false-positive, and trust-boundary fixtures |
 
 ### Exit criteria
 
@@ -71,6 +73,7 @@ Status: **COMPLETE**
 - detects literal external destinations supported by code;
 - distinguishes Redis storage/cache behavior from messaging;
 - provides a repository-wide system-boundary output;
+- preserves monorepo frontend, backend, worker, database, and infrastructure boundaries;
 - and never presents an automatically matched backend repository as proven runtime topology.
 
 Later HITL validation promotes selected service-to-repository mappings into trusted topology. It must build on this milestone's evidence rather than compensate for missing or incorrect parsing.

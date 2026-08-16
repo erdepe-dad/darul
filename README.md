@@ -23,14 +23,15 @@ The repository includes a read-only, responsive graph atlas for human exploratio
 
 | Language / framework | Extracted structure |
 | --- | --- |
-| Python | Imports, classes, functions, async functions, HTTP calls, common backend routes |
-| JavaScript / TypeScript | Imports, functions, classes, `fetch`, Axios, Express-style routes |
+| Python | Imports, classes, functions, async functions, HTTP calls, common backend routes, and PostgreSQL/Redis client evidence |
+| JavaScript / TypeScript | Imports, functions, classes, `fetch`, Axios, literal API-client calls, Express routes, and Next.js App Router handlers |
 | Go | Imports, functions, and common HTTP router methods |
 | Java | Imports, classes, interfaces, records, enums, methods, and overload-aware IDs |
 | Spring Boot | Controller mappings, Feign mappings, RestTemplate/WebClient calls, and CRNK JSON:API resources |
 | Vaadin | Flow `@Route` pages and Vaadin 8 `@SpringView` pages |
 | Flowable | BPMN processes, workflow steps, sequence flows, call activities, delegate bindings, runtime starts, and `JavaDelegate` implementations |
 | Messaging | Kafka, RabbitMQ, Redis, JMS, and Spring Cloud Stream publishers/listeners; RabbitMQ routing-key-to-queue bindings |
+| Prisma / SQL | Prisma datasource providers and evidence-backed database-specific SQL features |
 
 Neo4j 5.20 or newer is the supported database. Other Bolt-compatible graph databases may require schema-query adaptations.
 

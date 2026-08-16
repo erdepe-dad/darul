@@ -104,6 +104,67 @@ router.get('/api/users/:id', loadUser);
         self.assertEqual(parsed.requests[0].normalized_url, "/api/users/{param}")
         self.assertEqual(parsed.routes[0].handler_id, "sample:src/pages/users.tsx::loadUser")
 
+    def test_nextjs_app_router_handlers_become_backend_routes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "apps" / "web" / "src" / "app" / "api" / "documents" / "[id]" / "route.ts"
+            source.parent.mkdir(parents=True)
+            source.write_text(
+                """export async function GET(request: Request) { return Response.json({}); }
+export function PATCH(request: Request) { return Response.json({}); }
+""",
+                encoding="utf-8",
+            )
+            parsed = parse_file(source, settings_for(root))
+
+        self.assertIsNone(parsed.route_path)
+        self.assertEqual(parsed.frameworks, ["nextjs"])
+        self.assertEqual([route.method for route in parsed.routes], ["GET", "PATCH"])
+        self.assertEqual(parsed.routes[0].route_path, "/api/documents/[id]")
+        self.assertEqual(parsed.routes[0].normalized_url, "/api/documents/{param}")
+        self.assertEqual(
+            parsed.routes[0].handler_id,
+            "sample:apps/web/src/app/api/documents/[id]/route.ts::GET",
+        )
+
+    def test_nextjs_destructured_handlers_and_optional_catchalls_are_routes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "src" / "app" / "api" / "auth" / "[[...path]]" / "route.ts"
+            source.parent.mkdir(parents=True)
+            source.write_text(
+                "export const { GET, POST } = handlers;\n",
+                encoding="utf-8",
+            )
+            parsed = parse_file(source, settings_for(root))
+
+        self.assertEqual([route.method for route in parsed.routes], ["GET", "POST"])
+        self.assertEqual(
+            {route.normalized_url for route in parsed.routes},
+            {"/api/auth/{param}"},
+        )
+        self.assertTrue(all(route.handler_id is None for route in parsed.routes))
+
+    def test_javascript_api_client_literal_calls_are_requests(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "src" / "lib" / "api.ts"
+            source.parent.mkdir(parents=True)
+            source.write_text(
+                """const list = () => api.get<Result[]>(\"/api/documents\");
+const update = (id: string) => api.patch<Result>(`/api/documents/${id}`, {});
+const search = (q: string) => api.get<Result[]>(`/api/documents${searchQuery(q)}`);
+const nested = (q: string) => api.get<Result[]>(`/api/documents${q ? `?q=${q}` : ""}`);
+""",
+                encoding="utf-8",
+            )
+            parsed = parse_file(source, settings_for(root))
+
+        self.assertEqual([request.method for request in parsed.requests], ["GET", "PATCH", "GET", "GET"])
+        self.assertEqual(parsed.requests[1].normalized_url, "/api/documents/{param}")
+        self.assertEqual(parsed.requests[2].normalized_url, "/api/documents")
+        self.assertEqual(parsed.requests[3].normalized_url, "/api/documents")
+
     def test_scan_skips_excluded_directories(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

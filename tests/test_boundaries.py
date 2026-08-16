@@ -171,6 +171,53 @@ public class Service {
             {"datastore"},
         )
 
+    def test_python_worker_and_prisma_sql_database_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            worker = root / "apps" / "worker" / "queue.py"
+            worker.parent.mkdir(parents=True)
+            worker.write_text(
+                """import psycopg
+from redis import Redis
+client = Redis.from_url(redis_url)
+client.rpush(\"jobs\", \"1\")
+client.lpop(\"jobs\")
+psycopg.connect(database_url)
+""",
+                encoding="utf-8",
+            )
+            schema = root / "packages" / "database" / "schema.prisma"
+            schema.parent.mkdir(parents=True)
+            schema.write_text(
+                'datasource db {\n  provider = "postgresql"\n}\n',
+                encoding="utf-8",
+            )
+            migration = root / "packages" / "database" / "migration.sql"
+            migration.write_text(
+                "CREATE EXTENSION IF NOT EXISTS pg_trgm;\n",
+                encoding="utf-8",
+            )
+
+            parsed_worker = parse_file(worker, settings_for(root))
+            parsed_schema = parse_file(schema, settings_for(root))
+            parsed_migration = parse_file(migration, settings_for(root))
+
+        worker_systems = {
+            (item.kind, item.technology, item.role)
+            for item in parsed_worker.system_dependencies
+        }
+        self.assertIn(("database", "postgresql", "database"), worker_systems)
+        self.assertIn(("cache", "redis", "datastore"), worker_systems)
+        self.assertIn(("messaging", "redis", "queue"), worker_systems)
+        self.assertIn(
+            ("database", "postgresql", "database"),
+            {(item.kind, item.technology, item.role) for item in parsed_schema.system_dependencies},
+        )
+        self.assertIn(
+            ("database", "postgresql", "database"),
+            {(item.kind, item.technology, item.role) for item in parsed_migration.system_dependencies},
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

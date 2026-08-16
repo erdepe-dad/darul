@@ -8,8 +8,8 @@ Darul converts repository structure and engineering history into a shared Neo4j 
 | --- | --- |
 | `.graph_engine/config.py` | Repository identity, environment loading, connection settings, and excluded directories |
 | `.graph_engine/db.py` | Neo4j driver lifecycle, schema constraints, read/write wrappers, and batched writes |
-| `.graph_engine/parser.py` | Python AST parsing and zero-token fallback parsers for JavaScript, TypeScript, Go, Java, Vaadin, and Flowable BPMN |
-| `.graph_engine/stitcher.py` | URL normalization, frontend-to-backend route stitching, and page inspection |
+| `.graph_engine/parser.py` | Python AST parsing and zero-token fallback parsers for JavaScript, TypeScript, Go, Java, Next.js App Router, Prisma/SQL evidence, Vaadin, and Flowable BPMN |
+| `.graph_engine/stitcher.py` | URL normalization, exact and catch-all frontend-to-backend candidate stitching, and page inspection |
 | `.graph_engine/tracer.py` | Bounded view/service traversal and Mermaid rendering across synchronous and asynchronous boundaries |
 | `.graph_engine/sync.py` | Incremental add/modify/delete/rename synchronization from a Git diff |
 | `.graph_engine/hooks/event_logger.py` | Session-event storage and architectural-decision lineage |

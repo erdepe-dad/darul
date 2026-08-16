@@ -40,6 +40,9 @@ class NormalizationTests(unittest.TestCase):
         ]
         self.assertEqual({normalize_url(value) for value in values}, {"/api/v1/users/{param}"})
 
+    def test_nextjs_optional_catchall_normalizes_without_a_trailing_bracket(self) -> None:
+        self.assertEqual(normalize_url("/api/admin/[[...path]]"), "/api/admin/{param}")
+
     def test_absolute_urls_drop_origin_query_and_trailing_slash(self) -> None:
         self.assertEqual(normalize_url("https://service.test/api/users/?active=1"), "/api/users")
 
@@ -57,7 +60,9 @@ class NormalizationTests(unittest.TestCase):
         self.assertEqual(stitched, 3)
         exact_query, parameters = db.writes[0]
         self.assertIn("MATCH (a:APIEndpoint)", exact_query)
-        self.assertNotIn("repo_name", exact_query)
+        self.assertNotIn("MATCH (a:APIEndpoint {repo_name:", exact_query)
+        self.assertIn("b.route_path CONTAINS '[...'", exact_query)
+        self.assertIn("b.repo_name = a.repo_name", exact_query)
         self.assertIn("trust_status = 'SUGGESTED'", exact_query)
         self.assertEqual(parameters, {})
 
