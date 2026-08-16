@@ -205,6 +205,33 @@ export const login = () => api.post("/auth/login");
         self.assertEqual(parsed_source.requests[0].system, "API_URL")
         self.assertEqual(parsed_client.requests[0].system, "API_URL")
 
+    def test_named_exported_axios_client_preserves_literal_service_host(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            client = root / "src" / "lib" / "axios.ts"
+            client.parent.mkdir(parents=True)
+            client.write_text(
+                '''import axios from "axios";
+export const api = axios.create({
+  baseURL: "https://backend.example.com/api/v1",
+});
+''',
+                encoding="utf-8",
+            )
+            source = root / "src" / "api" / "auth.ts"
+            source.parent.mkdir(parents=True)
+            source.write_text(
+                '''import { api as adminApi } from "@/lib/axios";
+export const login = () => adminApi.post("/admin/auth/login");
+''',
+                encoding="utf-8",
+            )
+
+            parsed = parse_file(source, settings_for(root))
+
+        self.assertEqual(parsed.requests[0].url, "/api/v1/admin/auth/login")
+        self.assertEqual(parsed.requests[0].system, "backend.example.com")
+
     def test_scan_skips_excluded_directories(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -267,6 +294,125 @@ func routes() { router.POST("/api/users/:id", createUser) }
         self.assertEqual(parsed.classes[0].name, "Server")
         self.assertEqual(parsed.routes[0].method, "POST")
         self.assertEqual(parsed.routes[0].normalized_url, "/api/users/{param}")
+
+    def test_go_parser_composes_nested_gin_groups(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "handler.go"
+            source.write_text(
+                '''package auth
+func RegisterRoutes(rg *gin.RouterGroup) {
+    auth := rg.Group("/auth")
+    private := auth.Group("/private", middleware.RequirePermission("users:read"))
+    auth.POST("/register", register)
+    auth.GET("", getAuth)
+    private.GET("/users/:id", getUser)
+}
+''',
+                encoding="utf-8",
+            )
+            parsed = parse_file(source, settings_for(root))
+
+        self.assertEqual(
+            [(route.method, route.normalized_url) for route in parsed.routes],
+            [
+                ("POST", "/auth/register"),
+                ("GET", "/auth"),
+                ("GET", "/auth/private/users/{param}"),
+            ],
+        )
+
+    def test_go_scan_composes_cross_package_gin_prefixes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "go.mod").write_text("module example.com/shop\n", encoding="utf-8")
+            main = root / "cmd" / "api" / "main.go"
+            main.parent.mkdir(parents=True)
+            main.write_text(
+                '''package main
+import handlerPayment "example.com/shop/internal/handler/payment"
+func main() {
+    v1 := r.Group("/api/v1")
+    v10 := r.Group("/api/v1.0")
+    handlerPayment.RegisterRoutes(v1)
+    handlerPayment.RegisterRoutes(v10)
+}
+''',
+                encoding="utf-8",
+            )
+            handler = root / "internal" / "handler" / "payment" / "handler.go"
+            handler.parent.mkdir(parents=True)
+            handler.write_text(
+                '''package payment
+func RegisterRoutes(rg *gin.RouterGroup) {
+    payment := rg.Group("/payment")
+    payment.GET("/:id", getPayment)
+    registerCallbacks(payment)
+}
+''',
+                encoding="utf-8",
+            )
+            helper = handler.with_name("callbacks.go")
+            helper.write_text(
+                '''package payment
+func registerCallbacks(rg *gin.RouterGroup) {
+    callbacks := rg.Group("/callbacks")
+    callbacks.POST("/:id", receiveCallback)
+}
+''',
+                encoding="utf-8",
+            )
+            test_handler = handler.with_name("handler_test.go")
+            test_handler.write_text(
+                '''package payment
+func testRoutes() { test := r.Group("/wrong"); test.GET("/only-test", fake) }
+''',
+                encoding="utf-8",
+            )
+            result = scan_repository(settings_for(root))
+
+        routes = [
+            route.normalized_url
+            for parsed in result.files
+            for route in parsed.routes
+        ]
+        self.assertEqual(
+            routes,
+            [
+                "/api/v1/payment/callbacks/{param}",
+                "/api/v1.0/payment/callbacks/{param}",
+                "/api/v1/payment/{param}",
+                "/api/v1.0/payment/{param}",
+            ],
+        )
+
+    def test_go_parser_extracts_literal_symbolic_and_helper_http_requests(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "client.go"
+            source.write_text(
+                '''package client
+func (c *client) endpoint() string {
+    if c.sandbox { return "https://sandbox.example.com/pay" }
+    return "https://api.example.com/pay"
+}
+func (c *client) send(ctx context.Context) {
+    http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint(), nil)
+    url := c.cfg.BaseURL + "/orders/" + orderID
+    http.NewRequest(http.MethodGet, url, nil)
+    verify := fmt.Sprintf("%sverify/%s", c.cfg.BaseURL, orderID)
+    http.NewRequest(http.MethodGet, verify, nil)
+}
+''',
+                encoding="utf-8",
+            )
+            parsed = parse_file(source, settings_for(root))
+
+        requests = {(item.method, item.url, item.system) for item in parsed.requests}
+        self.assertIn(("POST", "https://sandbox.example.com/pay", "sandbox.example.com"), requests)
+        self.assertIn(("POST", "https://api.example.com/pay", "api.example.com"), requests)
+        self.assertIn(("GET", "${c.cfg.BaseURL}/orders/${orderID}", "c.cfg.BaseURL"), requests)
+        self.assertIn(("GET", "${c.cfg.BaseURL}verify/{param}", "c.cfg.BaseURL"), requests)
 
     def test_java_spring_vaadin_and_flowable_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

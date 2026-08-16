@@ -21,6 +21,7 @@ DEFAULT_EXCLUDES = frozenset(
         "build",
         "coverage",
         "dist",
+        "dist.old",
         "node_modules",
         "target",
         "vendor",

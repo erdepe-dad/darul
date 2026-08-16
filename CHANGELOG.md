@@ -12,6 +12,10 @@ All notable changes to Darul are documented here.
 - Next.js App Router backend routes, literal same-origin API-client requests, and catch-all route candidates
 - Prisma/SQL evidence files plus Python psycopg and Redis queue/datastore detection
 - Configured Axios instances composed with Next.js rewrite prefixes and environment-backed service identities
+- Cross-package and same-package Gin group composition, including nested groups, helper registration, empty child paths, middleware arguments, and packages mounted under multiple API prefixes
+- Evidence-backed Go `net/http` request extraction for literal, helper-returned, and unresolved symbolic destinations
+- Named exported Axios client resolution with literal service-host preservation
+- Default exclusion for `dist.old` generated build backups
 
 ### Changed
 

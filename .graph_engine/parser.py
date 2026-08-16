@@ -626,6 +626,10 @@ JS_DEFAULT_IMPORT_RE = re.compile(
     r"(?:^|\n)\s*import\s+([A-Za-z_$][\w$]*)\s+from\s+['\"]([^'\"]+)['\"]",
     re.MULTILINE,
 )
+JS_NAMED_IMPORT_RE = re.compile(
+    r"(?:^|\n)\s*import\s*\{([^}]+)\}\s*from\s*['\"]([^'\"]+)['\"]",
+    re.MULTILINE | re.DOTALL,
+)
 JS_CLASS_RE = re.compile(r"\bclass\s+([A-Za-z_$][\w$]*)(?:\s+extends\s+([^\s{]+))?")
 JS_FUNCTION_RE = re.compile(
     r"(?:\b(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(([^)]*)\)|"
@@ -663,7 +667,20 @@ GO_STRUCT_RE = re.compile(r"(?m)^\s*type\s+([A-Za-z_]\w*)\s+struct\s*\{")
 GO_IMPORT_RE = re.compile(r"(?m)^\s*import\s+(?:\w+\s+)?\"([^\"]+)\"")
 GO_IMPORT_BLOCK_RE = re.compile(r"(?ms)^\s*import\s*\((.*?)\)")
 GO_ROUTE_RE = re.compile(
-    r"\b(HandleFunc|Handle|GET|POST|PUT|PATCH|DELETE)\s*\(\s*\"([^\"]+)\"(?:\s*,\s*([A-Za-z_]\w*))?"
+    r"\b([A-Za-z_]\w*)\s*\.\s*(HandleFunc|Handle|GET|POST|PUT|PATCH|DELETE)"
+    r"\s*\(\s*\"([^\"]*)\"(?:\s*,\s*([A-Za-z_]\w*))?"
+)
+GO_GROUP_RE = re.compile(
+    r"(?m)\b([A-Za-z_]\w*)\s*:=\s*([A-Za-z_]\w*)\.Group\(\s*\"([^\"]*)\""
+)
+GO_REGISTER_ROUTES_RE = re.compile(
+    r"\b([A-Za-z_]\w*)\.RegisterRoutes\(\s*([A-Za-z_]\w*)\b"
+)
+GO_HTTP_REQUEST_WITH_CONTEXT_RE = re.compile(
+    r"\bhttp\.NewRequestWithContext\(\s*[^,\n]+,\s*([^,\n]+),\s*([^,\n]+),"
+)
+GO_HTTP_REQUEST_RE = re.compile(
+    r"\bhttp\.NewRequest\(\s*([^,\n]+),\s*([^,\n]+),"
 )
 JAVA_IMPORT_RE = re.compile(r"(?m)^\s*import\s+(?:static\s+)?([\w.*]+)\s*;")
 JAVA_COMMENT_TOKEN_RE = re.compile(
@@ -927,17 +944,18 @@ def _discover_javascript_http_clients(
         rel_path = path.relative_to(root).as_posix()
         canonical = rel_path.rsplit(".", 1)[0]
         for match in re.finditer(
-            r"\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*axios\.create\s*\(\s*\{(.*?)\}\s*\)",
+            r"\b(?:export\s+)?const\s+([A-Za-z_$][\w$]*)\s*=\s*axios\.create\s*\(\s*\{(.*?)\}\s*\)",
             text,
             re.DOTALL,
         ):
             base_match = re.search(r"\bbaseURL\s*:\s*['\"]([^'\"]+)['\"]", match.group(2))
             if not base_match:
                 continue
-            base_url = normalize_url(base_match.group(1))
+            raw_base_url = base_match.group(1)
+            base_url = normalize_url(raw_base_url)
             system = next(
                 (name for prefix, name in rewrite_rules if base_url == prefix or base_url.startswith(prefix + "/")),
-                "",
+                _request_system_name(raw_base_url),
             )
             client_rows.append((canonical, match.group(1), base_url, system))
     return tuple(client_rows), tuple(rewrite_rules)
@@ -1026,6 +1044,16 @@ def _parse_javascript(
         if canonical in clients_by_path:
             _, base_url, system = clients_by_path[canonical]
             resolved_clients[import_match.group(1)] = (base_url, system)
+    for import_match in JS_NAMED_IMPORT_RE.finditer(text):
+        canonical = _javascript_import_path(rel_path, import_match.group(2))
+        client = clients_by_path.get(canonical)
+        if client is None:
+            continue
+        exported_name, base_url, system = client
+        for item in import_match.group(1).split(","):
+            names = re.split(r"\s+as\s+", item.strip())
+            if names and names[0] == exported_name:
+                resolved_clients[names[-1]] = (base_url, system)
     classes = [
         Symbol(
             _entity_id(repo_name, rel_path, match.group(1)),
@@ -1118,7 +1146,135 @@ def _parse_javascript(
     return imports, classes, functions, requests, routes
 
 
+def _go_group_paths(text: str) -> dict[str, str]:
+    groups: dict[str, str] = {}
+    pending = list(GO_GROUP_RE.finditer(text))
+    while pending:
+        changed = False
+        remaining: list[re.Match[str]] = []
+        for match in pending:
+            child, parent, path = match.groups()
+            if parent in groups:
+                groups[child] = _join_route(groups[parent], path)
+                changed = True
+            elif not any(item.group(1) == parent for item in pending):
+                groups[child] = normalize_url(path)
+                changed = True
+            else:
+                remaining.append(match)
+        if not changed:
+            for match in remaining:
+                groups[match.group(1)] = normalize_url(match.group(3))
+            break
+        pending = remaining
+    return groups
+
+
+def _go_method(expression: str) -> str:
+    value = expression.strip()
+    match = re.fullmatch(r"(?:http\.)?Method(GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD)", value, re.IGNORECASE)
+    if match:
+        return match.group(1).upper()
+    if literal := re.fullmatch(r'"(GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD)"', value, re.IGNORECASE):
+        return literal.group(1).upper()
+    return "DYNAMIC"
+
+
+def _go_symbolic_url(expression: str) -> str:
+    value = expression.strip()
+    if literal := re.fullmatch(r'"([^"\n]*)"', value):
+        return literal.group(1)
+    if sprintf := re.match(r'fmt\.Sprintf\(\s*"([^"\n]*)"\s*(?:,\s*(.*))?\)$', value):
+        arguments = iter(
+            part.strip() for part in (sprintf.group(2) or "").split(",")
+        )
+
+        def replace_format(_: re.Match[str]) -> str:
+            argument = next(arguments, "")
+            if re.fullmatch(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+", argument):
+                return f"${{{argument}}}"
+            return "{param}"
+
+        return re.sub(r"%[-+#0-9.]*[a-zA-Z]", replace_format, sprintf.group(1))
+    parts = [part.strip() for part in re.split(r"\s*\+\s*", value)]
+    if len(parts) > 1:
+        rendered: list[str] = []
+        for part in parts:
+            if literal := re.fullmatch(r'"([^"\n]*)"', part):
+                rendered.append(literal.group(1))
+            else:
+                rendered.append(f"${{{part}}}")
+        return "".join(rendered)
+    return f"${{{value}}}"
+
+
+def _go_requests(
+    text: str, repo_name: str, rel_path: str, functions: list[Symbol],
+) -> list[APIRequest]:
+    helper_urls: dict[str, list[str]] = {}
+    function_matches = list(GO_FUNCTION_RE.finditer(text))
+    for index, match in enumerate(function_matches):
+        end = function_matches[index + 1].start() if index + 1 < len(function_matches) else len(text)
+        literals = re.findall(r'\breturn\s+"(https?://[^"\n]+)"', text[match.start():end])
+        if literals:
+            helper_urls[match.group(1)] = list(dict.fromkeys(literals))
+
+    assignments: dict[str, list[tuple[int, str]]] = {}
+    for match in re.finditer(
+        r"(?ms)\b([A-Za-z_]\w*)\s*:=\s*(fmt\.Sprintf\(.*?\))", text,
+    ):
+        assignments.setdefault(match.group(1), []).append((match.start(), match.group(2).strip()))
+    for match in re.finditer(r"(?m)\b([A-Za-z_]\w*)\s*:=\s*([^\n]+)", text):
+        if match.group(2).lstrip().startswith("fmt.Sprintf("):
+            continue
+        assignments.setdefault(match.group(1), []).append((match.start(), match.group(2).strip()))
+
+    function_offsets = [(match.start(), symbol.id) for match, symbol in zip(function_matches, functions)]
+
+    def source_function(offset: int) -> str:
+        index = bisect.bisect_right([item[0] for item in function_offsets], offset) - 1
+        return function_offsets[index][1] if index >= 0 else ""
+
+    def resolve(expression: str, offset: int) -> list[str]:
+        value = expression.strip()
+        if call := re.fullmatch(r"(?:[A-Za-z_]\w*\.)?([A-Za-z_]\w*)\(\)", value):
+            if call.group(1) in helper_urls:
+                return helper_urls[call.group(1)]
+        if re.fullmatch(r"[A-Za-z_]\w*", value):
+            candidates = [item for item in assignments.get(value, []) if item[0] < offset]
+            if candidates:
+                assignment_offset, assignment = max(candidates, key=lambda item: item[0])
+                return resolve(assignment, assignment_offset)
+        return [_go_symbolic_url(value)]
+
+    requests: list[APIRequest] = []
+    seen: set[tuple[str, str, int]] = set()
+    matches = [*GO_HTTP_REQUEST_WITH_CONTEXT_RE.finditer(text), *GO_HTTP_REQUEST_RE.finditer(text)]
+    for match in sorted(matches, key=lambda item: item.start()):
+        method = _go_method(match.group(1))
+        for url in resolve(match.group(2), match.start()):
+            safe_url = _safe_request_url(url)
+            line = _line_number(text, match.start())
+            key = (method, safe_url, line)
+            if key in seen:
+                continue
+            seen.add(key)
+            requests.append(
+                APIRequest(
+                    _entity_id(repo_name, rel_path, f"request:{method}:{safe_url}:{line}"),
+                    method,
+                    safe_url,
+                    normalize_url(safe_url),
+                    line,
+                    source_function(match.start()),
+                    _request_system_name(url),
+                )
+            )
+    return requests
+
+
 def _parse_go(text: str, repo_name: str, rel_path: str) -> tuple[list[str], list[Symbol], list[Symbol], list[APIRequest], list[Route]]:
+    text = _mask_evidence_comments(text, ".go")
     imports = set(GO_IMPORT_RE.findall(text))
     for block in GO_IMPORT_BLOCK_RE.findall(text):
         imports.update(re.findall(r'(?:\w+\s+)?"([^"]+)"', block))
@@ -1130,14 +1286,19 @@ def _parse_go(text: str, repo_name: str, rel_path: str) -> tuple[list[str], list
         Symbol(_entity_id(repo_name, rel_path, match.group(1)), match.group(1), _line_number(text, match.start()), f"{match.group(1)}({match.group(2).strip()})")
         for match in GO_FUNCTION_RE.finditer(text)
     ]
+    requests = _go_requests(text, repo_name, rel_path, functions)
+    groups = _go_group_paths(text)
     routes: list[Route] = []
     for match in GO_ROUTE_RE.finditer(text):
-        route_call = match.group(1).upper()
-        path = match.group(2)
+        receiver = match.group(1)
+        route_call = match.group(2).upper()
+        path = _join_route(groups.get(receiver, ""), match.group(3))
         method = route_call if route_call in {"GET", "POST", "PUT", "PATCH", "DELETE"} else "GET"
-        handler = match.group(3)
+        handler = match.group(4)
         routes.append(Route(f"{repo_name}:{method}:{normalize_url(path)}", method, path, normalize_url(path), _line_number(text, match.start()), _entity_id(repo_name, rel_path, handler) if handler else None))
-    return sorted(imports), classes, functions, [], routes
+    if rel_path.endswith("_test.go"):
+        requests, routes = [], []
+    return sorted(imports), classes, functions, requests, routes
 
 
 def _java_annotation_path(arguments: str | None) -> str:
@@ -2146,6 +2307,142 @@ def _scan_worker_count(file_count: int) -> int:
     return max(1, min(4, os.cpu_count() or 1, file_count))
 
 
+def _go_import_aliases(text: str) -> dict[str, str]:
+    aliases: dict[str, str] = {}
+    blocks = GO_IMPORT_BLOCK_RE.findall(text)
+    entries = [
+        *re.findall(r'(?m)^\s*import\s+(?:([A-Za-z_]\w*)\s+)?"([^"]+)"', text),
+    ]
+    for block in blocks:
+        entries.extend(re.findall(r'(?m)^\s*(?:([A-Za-z_]\w*)\s+)?"([^"]+)"', block))
+    for alias, import_path in entries:
+        name = alias or import_path.rstrip("/").rsplit("/", 1)[-1]
+        if name not in {"_", "."}:
+            aliases[name] = import_path
+    return aliases
+
+
+def _compose_go_repository_routes(files: list[ParsedFile], settings: Settings) -> None:
+    """Apply runtime Gin group prefixes passed across package RegisterRoutes calls."""
+    go_mod = settings.repo_root / "go.mod"
+    try:
+        module_match = re.search(
+            r"(?m)^\s*module\s+(\S+)", go_mod.read_text(encoding="utf-8", errors="replace")
+        )
+    except OSError:
+        module_match = None
+    if not module_match:
+        return
+    module = module_match.group(1).rstrip("/")
+    package_prefixes: dict[str, set[str]] = {}
+    source_texts: dict[str, str] = {}
+    for parsed in files:
+        if parsed.extension != ".go" or parsed.path.endswith("_test.go"):
+            continue
+        path = settings.repo_root / parsed.path
+        try:
+            text = _mask_evidence_comments(path.read_text(encoding="utf-8", errors="replace"), ".go")
+        except OSError:
+            continue
+        source_texts[parsed.path] = text
+        groups = _go_group_paths(text)
+        aliases = _go_import_aliases(text)
+        for match in GO_REGISTER_ROUTES_RE.finditer(text):
+            import_path = aliases.get(match.group(1), "")
+            prefix = groups.get(match.group(2))
+            if not prefix or not import_path.startswith(f"{module}/"):
+                continue
+            package_path = import_path[len(module) + 1:].strip("/")
+            package_prefixes.setdefault(package_path, set()).add(prefix)
+
+    function_defs: dict[tuple[str, str], tuple[str, int, int, str, str, dict[str, str]]] = {}
+    for rel_path, text in source_texts.items():
+        package_path = posixpath.dirname(rel_path)
+        matches = list(GO_FUNCTION_RE.finditer(text))
+        for index, match in enumerate(matches):
+            router = re.search(r"\b([A-Za-z_]\w*)\s+\*gin\.RouterGroup\b", match.group(2))
+            if not router:
+                continue
+            end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+            segment = text[match.start():end]
+            function_defs[(package_path, match.group(1))] = (
+                rel_path,
+                _line_number(text, match.start()),
+                _line_number(text, end),
+                router.group(1),
+                segment,
+                _go_group_paths(segment),
+            )
+
+    function_prefixes: dict[tuple[str, str], set[str]] = {
+        key: {""} for key in function_defs if key[1] == "RegisterRoutes"
+    }
+    changed = True
+    while changed:
+        changed = False
+        for key, prefixes in list(function_prefixes.items()):
+            definition = function_defs.get(key)
+            if not definition:
+                continue
+            _, _, _, router, segment, groups = definition
+            for call in re.finditer(r"\b([A-Za-z_]\w*)\s*\(\s*([A-Za-z_]\w*)\b", segment):
+                target = (key[0], call.group(1))
+                if target == key or target not in function_defs:
+                    continue
+                argument = call.group(2)
+                if argument == router:
+                    local_prefix = ""
+                elif argument in groups:
+                    local_prefix = groups[argument]
+                else:
+                    continue
+                target_prefixes = function_prefixes.setdefault(target, set())
+                before = len(target_prefixes)
+                target_prefixes.update(_join_route(prefix, local_prefix) for prefix in prefixes)
+                changed = changed or len(target_prefixes) != before
+
+    for parsed in files:
+        if parsed.extension != ".go" or parsed.path.endswith("_test.go") or not parsed.routes:
+            continue
+        package_path = posixpath.dirname(parsed.path)
+        external_prefixes = package_prefixes.get(package_path)
+        if not external_prefixes:
+            continue
+        composed: list[Route] = []
+        definitions = [
+            (name, definition)
+            for (candidate_package, name), definition in function_defs.items()
+            if candidate_package == package_path and definition[0] == parsed.path
+        ]
+        for route in parsed.routes:
+            function_name = next(
+                (
+                    name for name, definition in definitions
+                    if definition[1] <= route.line <= definition[2]
+                ),
+                "",
+            )
+            local_prefixes = function_prefixes.get((package_path, function_name), {""})
+            for external_prefix in sorted(external_prefixes):
+                for local_prefix in sorted(local_prefixes):
+                    path = _join_route(
+                        external_prefix,
+                        _join_route(local_prefix, route.route_path),
+                    )
+                    normalized = normalize_url(path)
+                    composed.append(
+                        Route(
+                            f"{settings.repo_name}:{route.method}:{normalized}",
+                            route.method,
+                            path,
+                            normalized,
+                            route.line,
+                            route.handler_id,
+                        )
+                    )
+        parsed.routes = composed
+
+
 def scan_repository(settings: Settings = SETTINGS) -> ScanResult:
     started = time.monotonic()
     paths = iter_source_files(settings)
@@ -2173,6 +2470,7 @@ def scan_repository(settings: Settings = SETTINGS) -> ScanResult:
                     files.append(parsed)
                 if error is not None:
                     errors.append(error)
+    _compose_go_repository_routes(files, settings)
     return ScanResult(files, time.monotonic() - started, len(errors), errors)
 
 
