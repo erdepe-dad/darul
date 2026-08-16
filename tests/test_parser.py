@@ -593,13 +593,13 @@ public class Metadata {
                 '''import org.springframework.web.client.RestTemplate;
 public class RemoteResourceClient {
     RestTemplate restTemplate;
-    String getServiceUrl() { return baseUrl + "/api/surveys"; }
-    void deleteSurvey(String id) {
+    String getServiceUrl() { return baseUrl + "/api/resources"; }
+    void deleteResource(String id) {
         UriComponentsBuilder builder = UriComponentsBuilder.fromHttpUrl(getServiceUrl())
             .path("/delete/" + id);
         restTemplate.delete(builder.build().toString());
         // findMany(builder.build().toString());
-        // restTemplate.delete("http://localhost/api/surveys/delete/" + id);
+        // restTemplate.delete("http://localhost/api/resources/delete/" + id);
     }
 }
 ''',
@@ -608,7 +608,7 @@ public class RemoteResourceClient {
             parsed = parse_file(source, settings_for(root))
 
         requests = [(request.method, request.normalized_url) for request in parsed.requests]
-        self.assertEqual(requests, [("DELETE", "/api/surveys/delete/{param}")])
+        self.assertEqual(requests, [("DELETE", "/api/resources/delete/{param}")])
 
     def test_java_request_resolves_url_helpers_and_quoted_config_keys(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -631,11 +631,11 @@ public class ConfiguredApiClient {
         restTemplate.exchange(url, HttpMethod.GET, null, String.class);
     }
     void download() {
-        String url = new Config().getConfig("ASSET_API_URL").getValue() + "/api/car";
+        String url = new Config().getConfig("ASSET_API_URL").getValue() + "/api/assets";
         restTemplate().getForObject(url, String.class);
     }
     void roles() {
-        String url = this.base_url + "/roleMapping";
+        String url = this.base_url + "/permissions";
         restTemplate.exchange(url, HttpMethod.GET, null, String.class);
     }
 }
@@ -649,8 +649,8 @@ public class ConfiguredApiClient {
             for request in parsed.requests
         }
         self.assertIn(("GET", "/api/resources/categories", "SECONDARY_API_URL"), requests)
-        self.assertIn(("GET", "/api/car", "ASSET_API_URL"), requests)
-        self.assertIn(("GET", "/roleMapping", "BACKEND_API_URL"), requests)
+        self.assertIn(("GET", "/api/assets", "ASSET_API_URL"), requests)
+        self.assertIn(("GET", "/permissions", "BACKEND_API_URL"), requests)
 
     def test_java_rest_template_variables_resolve_get_and_post_urls(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -933,10 +933,10 @@ class Service { void load() {} }
     def test_java_vaadin_actions_capture_component_state_effects(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            source = root / "TaskComponent.java"
+            source = root / "ExampleTaskComponent.java"
             source.write_text(
                 '''@Component
-public class TaskComponent {
+public class ExampleTaskComponent {
     void wire() {
         grid.addSelectionListener(event -> {
             if (grid.asSingleSelect().getValue() != null) {
@@ -968,10 +968,10 @@ public class TaskComponent {
     def test_java_calls_preserve_complete_multiline_conditions(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            source = root / "TaskComponent.java"
+            source = root / "ExampleTaskComponent.java"
             source.write_text(
                 '''@Component
-public class TaskComponent {
+public class ExampleTaskComponent {
     ExampleTaskService service;
     public void cancel(String status) {
         if (status.equals("PENDING") || status.equals("READY") || status.equals("FAILED") ||

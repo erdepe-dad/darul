@@ -84,6 +84,7 @@ Human validation normally applies to a service boundary, such as `sample-web:BAC
 - Zero unvalidated cross-repository suggestions represented as facts in default agent context.
 - Every unresolved trace identifies the missing evidence or validation needed to continue.
 - Typical incremental updates complete in under two seconds.
+- A human can validate a service-level mapping and restitch its compatible endpoint set in one operator-UI workflow.
 
 ## Non-Goals
 

@@ -18,16 +18,16 @@ class FakeDB:
 
     def execute_read(self, query: str, **parameters):
         if "MATCH (f:CodeFile" in query:
-            return [{"id": "sample-web:View.java", "path": "View.java", "routes": ["/tasks"], "classes": ["ExampleTaskView"], "score": 4}]
+            return [{"id": "sample-web:ExampleTaskView.java", "path": "ExampleTaskView.java", "routes": ["/tasks"], "classes": ["ExampleTaskView"], "score": 4}]
         if "MATCH (seed:CodeFile" in query:
-            return [{"element_id": "1", "labels": ["Page"], "properties": {"id": "sample-web:View.java", "route_path": "/tasks", "repo_name": "sample-web"}}]
+            return [{"element_id": "1", "labels": ["Page"], "properties": {"id": "sample-web:ExampleTaskView.java", "route_path": "/tasks", "repo_name": "sample-web"}}]
         self.neighbor_reads += 1
         if self.neighbor_reads > 1:
             return []
         return [
             {
                 "source": "1", "source_labels": ["Page"],
-                "source_properties": {"id": "sample-web:View.java", "route_path": "/tasks", "repo_name": "sample-web"},
+                "source_properties": {"id": "sample-web:ExampleTaskView.java", "route_path": "/tasks", "repo_name": "sample-web"},
                 "target": "2", "target_labels": ["UIAction"],
                 "target_properties": {"id": "sample-web:action", "name": "approve", "event": "click", "repo_name": "sample-web"},
                 "relationship_id": "r1", "relationship_type": "HAS_ACTION", "relationship_properties": {},
@@ -121,7 +121,7 @@ class TracerTests(unittest.TestCase):
         self.assertIn("flowchart LR", trace["mermaid"])
 
     def test_mermaid_preserves_action_effects_and_long_conditions(self) -> None:
-        condition = "status == 2202 or status == 2503 or status == 2304 or status == 2010"
+        condition = 'status == "PENDING" or status == "READY" or status == "FAILED"'
         trace = {
             "nodes": [
                 {
@@ -144,7 +144,7 @@ class TracerTests(unittest.TestCase):
 
         self.assertIn("detail.setEnabled(true)", mermaid)
         self.assertIn("delete.setEnabled(false)", mermaid)
-        self.assertIn("status == 2010", mermaid)
+        self.assertIn("status == 'FAILED'", mermaid)
 
 
 if __name__ == "__main__":

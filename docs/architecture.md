@@ -146,6 +146,7 @@ OBSERVED source facts -> SUGGESTED connection -> VALIDATED or REJECTED
                                               -> STALE when evidence changes
 ```
 
+The operator UI will be the human-in-the-loop review surface. It presents the request, candidate backend, matching evidence, ambiguity, and affected endpoint count. The normal approval unit is a bounded service mapping:
 
 ```text
 source repository + service key -> target repository + path prefix
@@ -157,6 +158,7 @@ Durable assertions will belong in a version-controlled `.darul/validations.yaml`
 
 Agent-facing retrieval now fails closed for route candidates. Default context includes observed structural facts and `VALIDATED` route assertions; `SUGGESTED` routes are excluded from definitive paths. Diagnostic retrieval may show suggestions in a separately labeled section, but confidence alone never changes their trust state. An incomplete trusted path is returned as an evidence gap rather than completed speculatively.
 
+This trust policy is enforced at query time as well as in trace copy. Color, copy, or badges in the operator UI are not security boundaries. Durable HITL validation, rejection, provenance, and stale-rule handling remain the next milestone.
 
 ## Extension points
 

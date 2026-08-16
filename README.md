@@ -5,6 +5,7 @@
 
 Darul is a local-first structural code knowledge graph. It parses repositories without language-model tokens, stores globally scoped code entities and engineering decisions in Neo4j, stitches frontend requests to backend routes, and retrieves small relevant subgraphs for developers and coding agents.
 
+Cross-repository matches are candidates, not deployment truth. The stitcher labels automatic matches `SUGGESTED`, operator coverage counts only `VALIDATED` routes as resolved, and default agent context excludes suggestions. The next trust layer will let an informed operator validate service boundaries in an operator UI and preserve that provenance as a durable rule.
 
 The repository includes a read-only, responsive graph atlas for human exploration.
 
@@ -127,6 +128,7 @@ scripts/rotate-neo4j-password.sh
 
 # Trace a Vaadin view or Java entry point through calls, HTTP, messaging, and Flowable.
 .venv/bin/python3 -m graph_engine.cli trace --view ExampleTaskView
+.venv/bin/python3 -m graph_engine.cli trace --view ExampleController --format mermaid
 
 # Report repository-wide observed service and infrastructure boundaries without Neo4j.
 .venv/bin/python3 -m graph_engine.cli boundaries
@@ -197,7 +199,9 @@ Database credentials remain in the Python process. The browser receives only rea
 
 Binding the server to `0.0.0.0` exposes repository metadata to the network without application-level authentication. Use localhost by default and put Cloudflare Access, a trusted reverse proxy, or an equivalent authentication layer in front of remote deployments.
 
+The visualization server also exposes an operator API under `/api/operator/`. Repository metrics, unresolved-route evidence, and operation status are read-only. Service mappings, builds, and syncs require `DARUL_OPERATOR_TOKEN`; repository actions accept registered names rather than filesystem paths. The operator UI keeps that token in browser session storage and never receives Neo4j credentials.
 
+See [`docs/operator-ui-integration.md`](docs/operator-ui-integration.md) for the shared API, trust, ownership, parallel-development, and verification contract.
 
 ### Connecting Flowable and worker services
 
