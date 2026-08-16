@@ -165,6 +165,46 @@ const nested = (q: string) => api.get<Result[]>(`/api/documents${q ? `?q=${q}` :
         self.assertEqual(parsed.requests[2].normalized_url, "/api/documents")
         self.assertEqual(parsed.requests[3].normalized_url, "/api/documents")
 
+    def test_custom_axios_client_and_next_rewrite_compose_request_boundaries(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = root / "next.config.ts"
+            config.write_text(
+                """export default {
+  async rewrites() {
+    const target = process.env.API_URL ?? "http://backend.internal";
+    return [{ source: "/api/v1/:path*", destination: `${target}/api/v1/:path*` }];
+  }
+};
+""",
+                encoding="utf-8",
+            )
+            client = root / "src" / "lib" / "axios.ts"
+            client.parent.mkdir(parents=True)
+            client.write_text(
+                """import axios from "axios";
+const api = axios.create({ baseURL: "/api/v1" });
+axios.post("/api/v1/auth/refresh");
+export default api;
+""",
+                encoding="utf-8",
+            )
+            source = root / "src" / "api" / "auth.ts"
+            source.parent.mkdir(parents=True)
+            source.write_text(
+                """import api from "@/lib/axios";
+export const login = () => api.post("/auth/login");
+""",
+                encoding="utf-8",
+            )
+
+            parsed_client = parse_file(client, settings_for(root))
+            parsed_source = parse_file(source, settings_for(root))
+
+        self.assertEqual(parsed_source.requests[0].url, "/api/v1/auth/login")
+        self.assertEqual(parsed_source.requests[0].system, "API_URL")
+        self.assertEqual(parsed_client.requests[0].system, "API_URL")
+
     def test_scan_skips_excluded_directories(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

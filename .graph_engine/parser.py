@@ -10,6 +10,7 @@ import hashlib
 import io
 import itertools
 import os
+import posixpath
 import re
 import time
 import tokenize
@@ -621,6 +622,10 @@ IMPORT_RE = re.compile(
     r"(?:^|\n)\s*(?:import\s+(?:[^'\"\n]+?\s+from\s+)?|require\s*\(\s*)['\"]([^'\"]+)['\"]",
     re.MULTILINE,
 )
+JS_DEFAULT_IMPORT_RE = re.compile(
+    r"(?:^|\n)\s*import\s+([A-Za-z_$][\w$]*)\s+from\s+['\"]([^'\"]+)['\"]",
+    re.MULTILINE,
+)
 JS_CLASS_RE = re.compile(r"\bclass\s+([A-Za-z_$][\w$]*)(?:\s+extends\s+([^\s{]+))?")
 JS_FUNCTION_RE = re.compile(
     r"(?:\b(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(([^)]*)\)|"
@@ -637,9 +642,9 @@ JS_ROUTE_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 JS_HTTP_CLIENT_RE = re.compile(
-    r"\b(?:api|apiClient|httpClient)\s*\.\s*"
+    r"\b([A-Za-z_$][\w$]*)\s*\.\s*"
     r"(get|post|put|patch|delete|options|head)\s*"
-    r"(?:<.{0,600}?>\s*)?\(\s*([`'\"])(/api(?:/.*?)?)\2",
+    r"(?:<.{0,600}?>\s*)?\(\s*([`'\"])(/.*?)\3",
     re.IGNORECASE | re.DOTALL,
 )
 NEXT_ROUTE_FUNCTION_RE = re.compile(
@@ -884,6 +889,68 @@ def _template_url(value: str) -> str:
     return re.sub(r"\$\{[^}]+\}", "{param}", value)
 
 
+@functools.lru_cache(maxsize=64)
+def _discover_javascript_http_clients(
+    repo_root: str, excludes: tuple[str, ...],
+) -> tuple[tuple[tuple[str, str, str, str], ...], tuple[tuple[str, str], ...]]:
+    """Return configured Axios modules and Next.js rewrite prefixes."""
+    root = Path(repo_root)
+    excluded = set(excludes)
+    rewrite_rules: list[tuple[str, str]] = []
+    client_rows: list[tuple[str, str, str, str]] = []
+    candidates: list[Path] = []
+    for directory, names, files in os.walk(root):
+        names[:] = [name for name in names if name not in excluded]
+        base = Path(directory)
+        for filename in files:
+            lower_name = filename.lower()
+            if lower_name.startswith("next.config.") or (
+                Path(filename).suffix.lower() in {".js", ".jsx", ".ts", ".tsx"}
+                and Path(filename).stem.lower() in {"api", "axios", "client", "http", "httpclient"}
+            ):
+                candidates.append(base / filename)
+    candidates.sort(key=lambda path: (not path.name.lower().startswith("next.config."), path.as_posix()))
+    for path in candidates:
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if path.name.lower().startswith("next.config."):
+            env_match = re.search(r"process\.env\.([A-Z][A-Z0-9_]*)", text)
+            for source_match in re.finditer(r"\bsource\s*:\s*['\"]([^'\"]+)['\"]", text):
+                prefix = re.sub(r"/:\w+\*$", "", source_match.group(1)).rstrip("/") or "/"
+                if env_match:
+                    rewrite_rules.append((normalize_url(prefix), env_match.group(1)))
+            continue
+        if "axios.create" not in text:
+            continue
+        rel_path = path.relative_to(root).as_posix()
+        canonical = rel_path.rsplit(".", 1)[0]
+        for match in re.finditer(
+            r"\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*axios\.create\s*\(\s*\{(.*?)\}\s*\)",
+            text,
+            re.DOTALL,
+        ):
+            base_match = re.search(r"\bbaseURL\s*:\s*['\"]([^'\"]+)['\"]", match.group(2))
+            if not base_match:
+                continue
+            base_url = normalize_url(base_match.group(1))
+            system = next(
+                (name for prefix, name in rewrite_rules if base_url == prefix or base_url.startswith(prefix + "/")),
+                "",
+            )
+            client_rows.append((canonical, match.group(1), base_url, system))
+    return tuple(client_rows), tuple(rewrite_rules)
+
+
+def _javascript_import_path(rel_path: str, module: str) -> str:
+    if module.startswith("@/"):
+        return "src/" + module[2:].lstrip("/")
+    if module.startswith("."):
+        return posixpath.normpath(posixpath.join(posixpath.dirname(rel_path), module))
+    return module
+
+
 def _nextjs_route_path(rel_path: str) -> str | None:
     parts = Path(rel_path).parts
     if not parts or parts[-1].lower() not in NEXT_ROUTE_FILE_NAMES:
@@ -938,8 +1005,27 @@ def _nextjs_routes(
     ]
 
 
-def _parse_javascript(text: str, repo_name: str, rel_path: str) -> tuple[list[str], list[Symbol], list[Symbol], list[APIRequest], list[Route]]:
+def _parse_javascript(
+    text: str, repo_name: str, rel_path: str, settings: Settings,
+) -> tuple[list[str], list[Symbol], list[Symbol], list[APIRequest], list[Route]]:
     imports = sorted(set(IMPORT_RE.findall(text)))
+    client_rows, rewrite_rules = _discover_javascript_http_clients(
+        str(settings.repo_root), tuple(sorted(settings.excludes)),
+    )
+    clients_by_path = {
+        canonical: (variable, base_url, system)
+        for canonical, variable, base_url, system in client_rows
+    }
+    resolved_clients: dict[str, tuple[str, str]] = {}
+    current_module = rel_path.rsplit(".", 1)[0]
+    if current_module in clients_by_path:
+        variable, base_url, system = clients_by_path[current_module]
+        resolved_clients[variable] = (base_url, system)
+    for import_match in JS_DEFAULT_IMPORT_RE.finditer(text):
+        canonical = _javascript_import_path(rel_path, import_match.group(2))
+        if canonical in clients_by_path:
+            _, base_url, system = clients_by_path[canonical]
+            resolved_clients[import_match.group(1)] = (base_url, system)
     classes = [
         Symbol(
             _entity_id(repo_name, rel_path, match.group(1)),
@@ -964,9 +1050,19 @@ def _parse_javascript(text: str, repo_name: str, rel_path: str) -> tuple[list[st
 
     requests: list[APIRequest] = []
 
-    def add_request(method: str, url: str, offset: int) -> None:
+    def add_request(method: str, url: str, offset: int, system: str = "") -> None:
         line = _line_number(text, offset)
         clean_url = _safe_request_url(_template_url(url))
+        request_system = system or _request_system_name(url)
+        if not request_system and clean_url.startswith("/"):
+            request_system = next(
+                (
+                    name
+                    for prefix, name in rewrite_rules
+                    if clean_url == prefix or clean_url.startswith(prefix.rstrip("/") + "/")
+                ),
+                "",
+            )
         requests.append(
             APIRequest(
                 _entity_id(repo_name, rel_path, f"request:{method}:{clean_url}:{line}"),
@@ -974,7 +1070,7 @@ def _parse_javascript(text: str, repo_name: str, rel_path: str) -> tuple[list[st
                 clean_url,
                 normalize_url(clean_url),
                 line,
-                system=_request_system_name(url),
+                system=request_system,
             )
         )
 
@@ -991,7 +1087,17 @@ def _parse_javascript(text: str, repo_name: str, rel_path: str) -> tuple[list[st
             method_match = re.search(r"\bmethod\s*:\s*['\"]([A-Za-z]+)['\"]", config)
             add_request(method_match.group(1) if method_match else "GET", url_match.group(2), match.start())
     for match in JS_HTTP_CLIENT_RE.finditer(text):
-        add_request(match.group(1), match.group(3), match.start())
+        receiver = match.group(1)
+        path = match.group(4)
+        client = resolved_clients.get(receiver)
+        if client is None:
+            if receiver not in {"api", "apiClient", "httpClient"} or not path.startswith("/api"):
+                continue
+            add_request(match.group(2), path, match.start())
+            continue
+        base_url, system = client
+        full_url = normalize_url(f"{base_url.rstrip('/')}/{path.lstrip('/')}")
+        add_request(match.group(2), full_url, match.start(), system)
 
     routes: list[Route] = []
     for match in JS_ROUTE_RE.finditer(text):
@@ -1924,7 +2030,9 @@ def parse_file(path: Path, settings: Settings = SETTINGS) -> ParsedFile:
             visitor.routes,
         )
     elif extension in {".js", ".jsx", ".ts", ".tsx"}:
-        imports, classes, functions, requests, routes = _parse_javascript(text, settings.repo_name, rel_path)
+        imports, classes, functions, requests, routes = _parse_javascript(
+            text, settings.repo_name, rel_path, settings,
+        )
     elif extension == ".go":
         imports, classes, functions, requests, routes = _parse_go(text, settings.repo_name, rel_path)
         route_path = infer_page_route(rel_path)

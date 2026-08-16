@@ -63,7 +63,7 @@ Status: **COMPLETE**
 | Repository-wide boundary report | Pass | `graph_engine.cli boundaries` emits bounded text or complete JSON without contacting Neo4j |
 | Non-speculative cross-repository output | Pass | The rebuilt graph contains 312 `SUGGESTED` route candidates, zero validated routes, and operator coverage correctly reports 0 resolved of 805 requests |
 | Next.js handler provenance | Pass | 38 of 40 routes link directly to exported handler functions; two imported NextAuth destructured handlers remain explicit provenance gaps rather than fabricated functions |
-| Representative parser tests | Pass | All 80 unit tests pass, including database, cache, messaging-role, literal-host, local-port, provider, Next.js, Prisma/SQL, Python worker, secret-redaction, false-positive, and trust-boundary fixtures |
+| Representative parser tests | Pass | All 81 unit tests pass, including database, cache, messaging-role, literal-host, local-port, provider, Next.js, configured Axios rewrites, Prisma/SQL, Python worker, secret-redaction, false-positive, and trust-boundary fixtures |
 
 ### Exit criteria
 

@@ -24,7 +24,7 @@ The repository includes a read-only, responsive graph atlas for human exploratio
 | Language / framework | Extracted structure |
 | --- | --- |
 | Python | Imports, classes, functions, async functions, HTTP calls, common backend routes, and PostgreSQL/Redis client evidence |
-| JavaScript / TypeScript | Imports, functions, classes, `fetch`, Axios, literal API-client calls, Express routes, and Next.js App Router handlers |
+| JavaScript / TypeScript | Imports, functions, classes, `fetch`, Axios, configured Axios instances, Next.js rewrites, literal API-client calls, Express routes, and App Router handlers |
 | Go | Imports, functions, and common HTTP router methods |
 | Java | Imports, classes, interfaces, records, enums, methods, and overload-aware IDs |
 | Spring Boot | Controller mappings, Feign mappings, RestTemplate/WebClient calls, and CRNK JSON:API resources |

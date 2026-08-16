@@ -11,6 +11,7 @@ All notable changes to Darul are documented here.
 - File-owned `USES_SYSTEM` graph evidence with technology, role, scope, line, and safe configuration-key provenance
 - Next.js App Router backend routes, literal same-origin API-client requests, and catch-all route candidates
 - Prisma/SQL evidence files plus Python psycopg and Redis queue/datastore detection
+- Configured Axios instances composed with Next.js rewrite prefixes and environment-backed service identities
 
 ### Changed
 
