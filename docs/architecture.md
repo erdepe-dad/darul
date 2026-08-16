@@ -65,6 +65,7 @@ Do not change ID generation without a migration plan. IDs are referenced by deci
 (Function)-[:PUBLISHES_TO]->(MessageChannel)
 (MessageChannel)-[:ROUTES_TO|SAME_CHANNEL]->(MessageChannel)
 (MessageChannel)-[:CONSUMED_BY]->(Function)
+(CodeFile)-[:USES_SYSTEM]->(ExternalSystem)
 (Repository)-[:HAS_SESSION]->(Session)
 (Session)-[:RECORDED]->(SessionEvent)
 (Session)-[:MADE_DECISION]->(Decision)
@@ -98,7 +99,9 @@ The post-merge installer adds a marked block to `.git/hooks/post-merge`. Existin
 
 ## Parser strategy
 
-Python uses the standard-library `ast` module. Other languages use bounded structural regular expressions designed for speed and graceful degradation. The fallback parsers are not full compilers and may miss heavily generated syntax, macros, dynamic routing, unusual decorators, or calls assembled across multiple expressions.
+Python uses the standard-library `ast` module. Other languages use bounded structural regular expressions designed for speed and graceful degradation. Bounded configuration inputs include properties, YAML, TOML, Gradle, Maven, Compose, package manifests, requirements, and Go modules. The fallback parsers are not full compilers and may miss heavily generated syntax, macros, dynamic routing, unusual decorators, or calls assembled across multiple expressions.
+
+Each observed surrounding-system dependency becomes an `ExternalSystem` with `evidence_status = 'OBSERVED'` and a file-owned `USES_SYSTEM` relationship. Evidence records kind, technology, role, safe configuration key, source line, and runtime/test scope. The parser distinguishes Redis cache, datastore, session, and pub/sub evidence; identifies known email, communications, identity, storage, search, workflow, and payment integrations; and retains unknown literal HTTP destinations as host-and-port identities.
 
 Java `@JsonApiResource` classes become backend routes only when the repository declares a CRNK or Katharsis server path prefix in a properties file. This prevents client-side JSON:API DTOs from being misclassified as servers. External configuration can supply the same evidence through `GRAPH_ENGINE_JSON_API_PREFIXES`.
 
@@ -131,6 +134,28 @@ The web interface is read-only. It still exposes code paths, symbol names, route
 ## Decision lineage
 
 A new decision can supersede an earlier decision. The old node becomes `SUPERSEDED`, the new node becomes `ACTIVE`, and `new-[:SUPERSEDES]->old` preserves lineage. Context retrieval returns active decisions and the titles they replaced.
+
+## Target: human validation and agent trust
+
+Static parsing can prove that a frontend declares a request and that a backend declares a compatible route. It cannot always prove that the deployed frontend actually targets that backend. Darul therefore treats cross-boundary stitching as a governed assertion rather than collapsing discovery and truth into one relationship.
+
+The validation lifecycle is:
+
+```text
+OBSERVED source facts -> SUGGESTED connection -> VALIDATED or REJECTED
+                                              -> STALE when evidence changes
+```
+
+
+```text
+source repository + service key -> target repository + path prefix
+```
+
+
+Durable assertions will belong in a version-controlled `.darul/validations.yaml` file. Neo4j stores their projected nodes and relationships for traversal, including validator, timestamp, rationale, source revision, target revision, rule scope, and evidence fingerprint. A changed fingerprint marks the projection `STALE`; it does not silently reapprove the new evidence.
+
+Agent-facing retrieval now fails closed for route candidates. Default context includes observed structural facts and `VALIDATED` route assertions; `SUGGESTED` routes are excluded from definitive paths. Diagnostic retrieval may show suggestions in a separately labeled section, but confidence alone never changes their trust state. An incomplete trusted path is returned as an evidence gap rather than completed speculatively.
+
 
 ## Extension points
 

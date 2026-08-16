@@ -31,7 +31,8 @@ HOTSPOTS_QUERY = """
 MATCH (r:Repository {name: $repo_name})-[:CONTAINS]->(f:CodeFile)
 WHERE any(term IN $terms WHERE toLower(f.path) CONTAINS term)
 OPTIONAL MATCH (f)-[:DEFINES]->(symbol)
-OPTIONAL MATCH (f)-[:CONTAINS]->(:Page)-[:MAKES_REQUEST]->(a:APIEndpoint)-[:TARGETS_ROUTE]->(b:BackendRoute)
+OPTIONAL MATCH (f)-[:CONTAINS]->(:Page)-[:MAKES_REQUEST]->(a:APIEndpoint)-[route:TARGETS_ROUTE]->(b:BackendRoute)
+WHERE route.trust_status = 'VALIDATED'
 RETURN f.path AS path, collect(DISTINCT symbol.name)[0..8] AS symbols,
        collect(DISTINCT a.method + ' ' + a.normalized_url + ' -> ' + coalesce(b.repo_name, '?') + ':' + coalesce(b.route_path, '?'))[0..8] AS request_routes
 LIMIT 8

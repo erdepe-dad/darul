@@ -5,6 +5,7 @@
 
 Darul is a local-first structural code knowledge graph. It parses repositories without language-model tokens, stores globally scoped code entities and engineering decisions in Neo4j, stitches frontend requests to backend routes, and retrieves small relevant subgraphs for developers and coding agents.
 
+
 The repository includes a read-only, responsive graph atlas for human exploration.
 
 ## Why Darul
@@ -15,6 +16,8 @@ The repository includes a read-only, responsive graph atlas for human exploratio
 - Update only changed file subtrees after Git merges.
 - Retrieve targeted decision and code neighborhoods instead of repeatedly reading whole repositories.
 - Inspect the graph through a polished browser interface without exposing database credentials to JavaScript.
+- Keep observed code facts, auto-discovered candidates, and human-validated topology distinct.
+- Fail closed when an autonomous agent requests context that depends on an unvalidated or stale connection.
 
 ## Supported source inspection
 
@@ -123,6 +126,10 @@ scripts/rotate-neo4j-password.sh
 
 # Trace a Vaadin view or Java entry point through calls, HTTP, messaging, and Flowable.
 
+# Report repository-wide observed service and infrastructure boundaries without Neo4j.
+.venv/bin/python3 -m graph_engine.cli boundaries
+.venv/bin/python3 -m graph_engine.cli boundaries --format json
+
 # Persist runtime service URLs used to resolve configuration-key-based requests.
 .venv/bin/python3 -m graph_engine.cli services set \
   --base-url http://127.0.0.1:10000/api --target-repo admin-rest
@@ -186,11 +193,20 @@ Database credentials remain in the Python process. The browser receives only rea
 Binding the server to `0.0.0.0` exposes repository metadata to the network without application-level authentication. Use localhost by default and put Cloudflare Access, a trusted reverse proxy, or an equivalent authentication layer in front of remote deployments.
 
 
+
 ### Connecting Flowable and worker services
 
 Darul creates a Flowable path only when source evidence joins all three parts: a Java method starts a process key, an ingested BPMN `<process id>` has the same key, and BPMN delegate or expression bindings resolve to Java classes. Build every repository that owns those parts into the same Neo4j database. If an HTTP call targets a separately deployed service, scan that service too; Darul does not invent a process link across an unresolved external endpoint.
 
 Asynchronous boundaries use `MessageChannel` nodes instead of HTTP routes. A producer method connects with `PUBLISHES_TO`; RabbitMQ bindings use `ROUTES_TO`; matching channels across repositories use `SAME_CHANNEL`; and a listener connects to its worker method with `CONSUMED_BY`. Supported static patterns include `KafkaTemplate`, `@KafkaListener`, `RabbitTemplate`, `@RabbitListener`, Redis/JMS templates and listeners, and Spring Cloud Stream listeners. Dynamic topic names without a literal, constant, or Spring-property default remain unresolved and are shown as an evidence gap.
+
+### Evidence-true system boundaries
+
+The `boundaries` command scans source plus bounded configuration files and reports only what the repository declares. It identifies HTTP service keys and literal hosts, databases, caches, sessions, messaging, workflow, object storage, search, email, identity, communications providers, and recognized payment gateways. Local destinations such as `localhost:40000` remain visible because a different port is a separate process boundary.
+
+Database and infrastructure evidence includes its source file, line, runtime/test scope, and safe configuration key where available. Passwords, tokens, URL credentials, and query values are not emitted. Redis cache, datastore, session, and pub/sub roles remain distinct. Unknown HTTP providers are reported by host without an invented business category.
+
+Endpoint matching produces `SUGGESTED` route candidates. A candidate is not counted as resolved and is excluded from default coding-agent context until a HITL validation records it as `VALIDATED`.
 
 ## Docker persistence and restart behavior
 
@@ -248,6 +264,8 @@ See [docs/hooks.md](docs/hooks.md) for example lifecycle-hook configuration and 
 The implementation is split into configuration, Bolt access, parsers, ingestion, endpoint stitching, Git synchronization, hooks, and visualization modules. See [docs/architecture.md](docs/architecture.md) for the schema, data flow, extension points, and current parser limitations.
 
 The reproducible [LLM context benchmark](docs/benchmark.md) records the baseline token, runtime, tool-call, and answer-quality comparison between Darul retrieval and conventional source inspection.
+
+The [milestone specification](docs/milestones.md) defines the evidence-first system-boundary baseline and records which parts are currently complete, partial, or missing.
 
 ## Development
 

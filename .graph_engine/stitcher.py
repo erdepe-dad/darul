@@ -41,7 +41,8 @@ MATCH (a:APIEndpoint)
 MATCH (b:BackendRoute {normalized_url: a.normalized_url, method: a.method})
 MERGE (a)-[st:TARGETS_ROUTE]->(b)
 ON CREATE SET st.created_at = datetime()
-SET st.managed_by = 'stitcher', st.resolution = 'exact'
+SET st.managed_by = 'stitcher', st.resolution = 'exact',
+    st.trust_status = 'SUGGESTED', st.evidence_status = 'SUGGESTED'
 RETURN count(st) AS stitched
 """
 
@@ -63,7 +64,8 @@ WHERE row.target_repo = '' OR b.repo_name = row.target_repo
 MERGE (a)-[st:TARGETS_ROUTE]->(b)
 ON CREATE SET st.created_at = datetime()
 SET st.managed_by = 'stitcher', st.resolution = 'configured-prefix',
-    st.system = row.system, st.path_prefix = row.path_prefix
+    st.system = row.system, st.path_prefix = row.path_prefix,
+    st.trust_status = 'SUGGESTED', st.evidence_status = 'SUGGESTED'
 RETURN count(st) AS stitched
 """
 
@@ -79,7 +81,8 @@ CONFIGURE_SERVICE_QUERY = """
 MERGE (s:ExternalSystem {id: $system_id})
 SET s.name = $key, s.repo_name = $repo_name, s.base_url = $base_url,
     s.path_prefix = $path_prefix, s.target_repo = $target_repo,
-    s.configured_at = datetime()
+    s.configured_at = datetime(), s.mapping_status = 'CONFIGURED',
+    s.evidence_status = 'OBSERVED'
 RETURN properties(s) AS service
 """
 
@@ -105,11 +108,12 @@ RETURN properties(s) AS service
 INSPECT_QUERY = """
 MATCH (r:Repository {name: $repo_name})-[:CONTAINS]->(f:CodeFile {path: $page})
 OPTIONAL MATCH (f)-[:CONTAINS]->(p:Page)-[:MAKES_REQUEST]->(a:APIEndpoint)
-OPTIONAL MATCH (a)-[:TARGETS_ROUTE]->(b:BackendRoute)-[:HANDLED_BY]->(fn:Function)
+OPTIONAL MATCH (a)-[st:TARGETS_ROUTE]->(b:BackendRoute)-[:HANDLED_BY]->(fn:Function)
 RETURN f.path AS page, p.route_path AS route_path, f.frameworks AS frameworks,
        f.workflow_refs AS workflow_refs,
        collect(DISTINCT {method: a.method, url: a.url, normalized_url: a.normalized_url,
-                         backend_repo: b.repo_name, backend_route: b.route_path,
+                         candidate_backend_repo: b.repo_name, candidate_backend_route: b.route_path,
+                         trust_status: coalesce(st.trust_status, 'SUGGESTED'),
                          handler: fn.name, handler_file: fn.source_file_id}) AS requests
 """
 

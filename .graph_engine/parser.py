@@ -7,14 +7,17 @@ import bisect
 import concurrent.futures
 import functools
 import hashlib
+import io
 import itertools
 import os
 import re
 import time
+import tokenize
 import xml.etree.ElementTree as ET
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from .config import SETTINGS, Settings
 from .db import GraphDB
@@ -22,6 +25,55 @@ from .stitcher import normalize_url
 
 
 SOURCE_EXTENSIONS = frozenset({".py", ".js", ".jsx", ".ts", ".tsx", ".go", ".java", ".bpmn"})
+EVIDENCE_EXTENSIONS = frozenset({".properties", ".yml", ".yaml", ".toml", ".gradle", ".conf"})
+EVIDENCE_FILE_NAMES = frozenset({
+    "pom.xml", "build.gradle.kts", "package.json", "requirements.txt", "pyproject.toml",
+    "go.mod", "compose.yaml", "compose.yml", "docker-compose.yaml", "docker-compose.yml",
+})
+SYSTEM_EVIDENCE_HINTS = (
+    "http://", "https://", "jdbc:", "postgres", "mysql", "mariadb", "oracle",
+    "sqlserver", "mongodb", "neo4j", "redis", "@cache", "cachemanager", "kafka",
+    "rabbit", "jms", "pulsar", "elastic", "opensearch", "amazons3", "awssdk", "s3client", "minio",
+    "javamailsender", "jakarta.mail", "javax.mail", "spring.mail", "smtp", "sendgrid", "mailgun", "sesclient", "whatsapp", "twilio", "stripe",
+    "midtrans", "xendit", "paypal", "adyen", "doku", "espay", "keycloak", "flowable",
+)
+SYSTEM_TECH_HINTS = {
+    "postgresql": ("postgres", "jdbc:postgresql"),
+    "mysql": ("mysql",),
+    "mariadb": ("mariadb",),
+    "oracle": ("oracle", "ojdbc"),
+    "sqlserver": ("sqlserver", "mssql"),
+    "mongodb": ("mongodb", "mongoclient"),
+    "neo4j": ("neo4j", "graphdatabase.driver"),
+    "h2": ("jdbc:h2", "h2database"),
+    "spring-cache": ("@cache", "cachemanager"),
+    "kafka": ("kafka",),
+    "rabbitmq": ("rabbit", "amqp"),
+    "jms": ("jms", "activemq"),
+    "pulsar": ("pulsar",),
+    "elasticsearch": ("elastic", "resthighlevelclient"),
+    "opensearch": ("opensearch",),
+    "s3": ("s3client", "amazons3", "awssdk.services.s3"),
+    "minio": ("minio",),
+    "smtp": ("javamailsender", "jakarta.mail", "javax.mail", "spring.mail", "smtp://"),
+    "sendgrid": ("sendgrid",),
+    "mailgun": ("mailgun",),
+    "amazon-ses": ("sesclient", "amazonsimpleemailservice", "awssdk.services.ses"),
+    "whatsapp": ("whatsapp", "graph.facebook.com", "wa.me/"),
+    "twilio": ("twilio",),
+    "stripe": ("stripe",),
+    "midtrans": ("midtrans",),
+    "xendit": ("xendit",),
+    "paypal": ("paypal",),
+    "adyen": ("adyen",),
+    "doku": ("doku",),
+    "espay": ("espay",),
+    "keycloak": ("keycloak",),
+    "flowable": ("flowable", "runtimeservice"),
+}
+CONFIG_ASSIGNMENT_RE = re.compile(
+    r"(?m)^[ \t]*([A-Za-z_][A-Za-z0-9_.-]{1,120})[ \t]*[:=][ \t]*([^\r\n#;]*?)[ \t]*(?:[#;].*)?$"
+)
 MAX_FILE_BYTES = 2_000_000
 PARALLEL_SCAN_MIN_FILES = 64
 JSON_API_PREFIX_RE = re.compile(
@@ -138,6 +190,19 @@ class MessageBinding:
 
 
 @dataclass(slots=True)
+class SystemDependency:
+    id: str
+    name: str
+    kind: str
+    technology: str
+    role: str
+    evidence: str
+    line: int
+    scope: str = "runtime"
+    config_key: str = ""
+
+
+@dataclass(slots=True)
 class ParsedFile:
     id: str
     path: str
@@ -159,6 +224,7 @@ class ParsedFile:
     process_starts: list[ProcessStart] = field(default_factory=list)
     message_uses: list[MessageUse] = field(default_factory=list)
     message_bindings: list[MessageBinding] = field(default_factory=list)
+    system_dependencies: list[SystemDependency] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -178,6 +244,181 @@ class ScanResult:
 
 def _entity_id(repo_name: str, rel_path: str, name: str) -> str:
     return f"{repo_name}:{rel_path}::{name}"
+
+
+def _safe_identifier(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9._-]+", "-", value.strip()).strip("-") or "unknown"
+
+
+def _request_system_name(url: str) -> str:
+    value = url.strip().strip("`'\"")
+    if "://" in value:
+        return (urlsplit(value).hostname or "").lower()
+    match = re.match(r"(?:\$\{([^}:]+)(?::[^}]*)?}|\$?([A-Z][A-Z0-9_]{2,}))", value)
+    return (match.group(1) or match.group(2)) if match else ""
+
+
+def _safe_request_url(url: str) -> str:
+    value = url.strip().strip("`'\"")
+    if "://" not in value:
+        return value.split("?", 1)[0].split("#", 1)[0]
+    parsed = urlsplit(value)
+    host = parsed.hostname or ""
+    try:
+        port = parsed.port
+    except ValueError:
+        port = None
+    authority = f"{host}:{port}" if port else host
+    return f"{parsed.scheme}://{authority}{parsed.path or '/'}"
+
+
+def _evidence_scope(rel_path: str) -> str:
+    parts = {part.lower() for part in Path(rel_path).parts}
+    return "test" if parts.intersection({"test", "tests", "testing", "fixtures"}) else "runtime"
+
+
+def _parse_system_dependencies(
+    text: str, repo_name: str, rel_path: str, extension: str, lower_text: str | None = None,
+) -> list[SystemDependency]:
+    """Extract evidence-backed surrounding systems without retaining secret values."""
+    dependencies: list[SystemDependency] = []
+    seen: set[tuple[str, str, str]] = set()
+    scope = _evidence_scope(rel_path)
+
+    def add(kind: str, technology: str, role: str, match: re.Match[str], name: str = "") -> None:
+        key = (kind, technology, role)
+        if key in seen:
+            return
+        seen.add(key)
+        line = _line_number(text, match.start())
+        line_start = text.rfind("\n", 0, match.start()) + 1
+        line_end = text.find("\n", match.end())
+        line_text = text[line_start:line_end if line_end >= 0 else len(text)].strip()
+        config_key = ""
+        assignment = re.match(r"([A-Za-z_][A-Za-z0-9_.-]{1,120})\s*[:=]", line_text)
+        if assignment:
+            config_key = assignment.group(1)
+        marker = config_key or match.group(0)[:80]
+        if kind == "http-service":
+            marker = config_key or "literal URL host"
+        evidence = f"{marker} declares {technology} {role}"
+        identity = name or technology
+        dependencies.append(
+            SystemDependency(
+                _entity_id(
+                    repo_name, rel_path,
+                    f"system:{_safe_identifier(kind)}:{_safe_identifier(technology)}:{_safe_identifier(role)}",
+                ),
+                identity,
+                kind,
+                technology,
+                role,
+                evidence,
+                line,
+                scope,
+                config_key,
+            )
+        )
+
+    assignments: dict[str, tuple[str, re.Match[str]]] = {}
+    for assignment_match in CONFIG_ASSIGNMENT_RE.finditer(text):
+        key = re.sub(r"[_.-]+", ".", assignment_match.group(1).lower()).strip(".")
+        assignments[key] = (assignment_match.group(2).strip().strip("'\""), assignment_match)
+
+    smtp_host_keys = {
+        "spring.mail.host", "mail.smtp.host", "smtp.host", "mail.host",
+    }
+    for key, (raw_host, host_match) in assignments.items():
+        if key not in smtp_host_keys and not key.endswith(".smtp.host"):
+            continue
+        host = raw_host.lower().rstrip(".")
+        if "://" in host:
+            host = (urlsplit(host).hostname or "").lower().rstrip(".")
+        if not host or not re.fullmatch(r"[a-z0-9.-]+", host):
+            continue
+        port_key = f"{key.rsplit('.', 1)[0]}.port"
+        raw_port = assignments.get(port_key, ("", host_match))[0]
+        port = int(raw_port) if raw_port.isdigit() and 0 < int(raw_port) <= 65535 else None
+        identity = f"{host}:{port}" if port else host
+        add("email", "smtp", "email", host_match, identity)
+
+    patterns = (
+        ("database", "postgresql", "database", r"jdbc:postgresql|postgres(?:ql)?-jdbc|org\.postgresql|\bpostgresql\b"),
+        ("database", "mysql", "database", r"jdbc:mysql|mysql-connector|com\.mysql\.cj|com\.mysql\.jdbc"),
+        ("database", "mariadb", "database", r"jdbc:mariadb|mariadb-java-client|org\.mariadb"),
+        ("database", "oracle", "database", r"jdbc:oracle|\bojdbc\d*\b|oracle\.jdbc"),
+        ("database", "sqlserver", "database", r"jdbc:sqlserver|mssql-jdbc|com\.microsoft\.sqlserver"),
+        ("database", "mongodb", "database", r"mongodb(?:\+srv)?://|spring\.data\.mongodb|MongoClient|mongodb-driver"),
+        ("database", "neo4j", "database", r"neo4j(?:\+s|\+ssc)?://|GraphDatabase\.driver|spring\.data\.neo4j"),
+        ("database", "h2", "database", r"jdbc:h2|com\.h2database"),
+        ("cache", "spring-cache", "cache", r"@Cacheable|@CachePut|@CacheEvict|CacheManager"),
+        ("messaging", "kafka", "pubsub", r"KafkaTemplate|KafkaListener|spring\.kafka|kafka-clients"),
+        ("messaging", "rabbitmq", "queue", r"RabbitTemplate|RabbitListener|spring\.rabbitmq|amqp-client"),
+        ("messaging", "jms", "queue", r"JmsTemplate|JmsListener|jakarta\.jms|javax\.jms|activemq"),
+        ("messaging", "pulsar", "pubsub", r"PulsarTemplate|PulsarListener|spring\.pulsar"),
+        ("search", "elasticsearch", "search", r"ElasticsearchClient|RestHighLevelClient|spring\.elasticsearch|elasticsearch-java"),
+        ("search", "opensearch", "search", r"OpenSearchClient|opensearch-java|spring\.opensearch"),
+        ("object-storage", "s3", "storage", r"S3Client|AmazonS3|aws-sdk-s3|software\.amazon\.awssdk\.services\.s3"),
+        ("object-storage", "minio", "storage", r"MinioClient|io\.minio|\bminio\b"),
+        ("email", "smtp", "email", r"JavaMailSender|jakarta\.mail|javax\.mail|spring\.mail|smtp://"),
+        ("email", "sendgrid", "email", r"SendGrid|api\.sendgrid\.com|sendgrid-java"),
+        ("email", "mailgun", "email", r"MailgunClient|api\.mailgun\.net|mailgun-java"),
+        ("email", "amazon-ses", "email", r"SesClient|AmazonSimpleEmailService|software\.amazon\.awssdk\.services\.ses"),
+        ("communications", "whatsapp", "messaging", r"WhatsAppClient|WHATSAPP_(?:API_)?URL|graph\.facebook\.com/[^\s\"']*/messages|api\.whatsapp\.com|wa\.me/"),
+        ("communications", "twilio", "messaging", r"Twilio\.init|api\.twilio\.com|twilio-java|twilio-node"),
+        ("payment", "stripe", "payment-gateway", r"StripeClient|Stripe\.apiKey|api\.stripe\.com|stripe-java|\"stripe\"\s*:"),
+        ("payment", "midtrans", "payment-gateway", r"Midtrans|api\.midtrans\.com|app\.sandbox\.midtrans\.com|midtrans-client"),
+        ("payment", "xendit", "payment-gateway", r"Xendit|api\.xendit\.co|xendit-java|xendit-node"),
+        ("payment", "paypal", "payment-gateway", r"PayPalHttpClient|api-m\.paypal\.com|paypalhttp|paypal-checkout"),
+        ("payment", "adyen", "payment-gateway", r"Adyen|checkout-live\.adyenpayments\.com|adyen-java-api-library"),
+        ("payment", "doku", "payment-gateway", r"DokuClient|api\.doku\.com|sandbox\.doku\.com"),
+        ("payment", "espay", "payment-gateway", r"Espay|api\.espay\.id|sandbox-api\.espay\.id"),
+        ("identity", "keycloak", "identity", r"Keycloak|keycloak-spring|keycloak\.auth-server-url"),
+        ("workflow", "flowable", "workflow", r"org\.flowable|flowable-spring|RuntimeService"),
+    )
+    lower_text = lower_text if lower_text is not None else text.lower()
+    if any(marker in lower_text for marker in SYSTEM_EVIDENCE_HINTS):
+        for kind, technology, role, pattern in patterns:
+            technology_hints = SYSTEM_TECH_HINTS.get(technology, ())
+            if technology_hints and not any(hint in lower_text for hint in technology_hints):
+                continue
+            if match := re.search(pattern, text, re.IGNORECASE):
+                add(kind, technology, role, match)
+
+    redis_roles = (
+        ("cache", r"spring\.cache[^\n=]*[:=]\s*redis|RedisCacheManager"),
+        ("session", r"spring\.session[^\n=]*[:=]\s*redis|RedisIndexedSessionRepository"),
+        ("pubsub", r"RedisListener|convertAndSend\s*\("),
+        (
+            "datastore",
+            r"StringRedisTemplate|spring\.(?:data\.)?redis|"
+            r"opsFor(?:Value|Hash|List|Set|ZSet|Geo|HyperLogLog)|"
+            r"bound(?:Value|Hash|List|Set|ZSet)Ops",
+        ),
+    )
+    if "redis" in lower_text or "@cache" in lower_text:
+        for role, pattern in redis_roles:
+            if match := re.search(pattern, text, re.IGNORECASE):
+                add("cache", "redis", role, match)
+
+    if extension in SOURCE_EXTENSIONS or extension in {".properties", ".yml", ".yaml", ".conf"}:
+        ignored_hosts = {
+            "www.w3.org", "maven.apache.org", "www.apache.org", "schemas.xmlsoap.org",
+            "schema.org",
+        }
+        for match in re.finditer(r"https?://[^\s\"'<>]+", text):
+            parsed_url = urlsplit(match.group(0))
+            host = (parsed_url.hostname or "").lower().rstrip(".")
+            if not host or host in ignored_hosts or host.endswith(".example.com"):
+                continue
+            try:
+                port = parsed_url.port
+            except ValueError:
+                port = None
+            identity = f"{host}:{port}" if port else host
+            add("http-service", identity, "external-http", match, identity)
+
+    return dependencies
 
 
 @functools.lru_cache(maxsize=64)
@@ -340,14 +581,16 @@ class _PythonVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def _add_request(self, method: str, url: str, line: int) -> None:
-        key = f"{method}:{url}:{line}"
+        safe_url = _safe_request_url(url)
+        key = f"{method}:{safe_url}:{line}"
         self.requests.append(
             APIRequest(
                 _entity_id(self.repo_name, self.rel_path, f"request:{key}"),
                 method,
-                url,
-                normalize_url(url),
+                safe_url,
+                normalize_url(safe_url),
                 line,
+                system=_request_system_name(url),
             )
         )
 
@@ -395,6 +638,7 @@ JAVA_IMPORT_RE = re.compile(r"(?m)^\s*import\s+(?:static\s+)?([\w.*]+)\s*;")
 JAVA_COMMENT_TOKEN_RE = re.compile(
     r'"(?:\\.|[^"\\])*(?:"|\Z)'
     r"|'(?:\\.|[^'\\])*(?:'|\Z)"
+    r"|`(?:\\.|[^`\\])*(?:`|\Z)"
     r"|//[^\r\n]*"
     r"|/\*.*?(?:\*/|\Z)",
     re.DOTALL,
@@ -598,7 +842,8 @@ def _java_system_hint(expression: str, text: str) -> str:
     if assignment:
         key = assignment.group(1) or assignment.group(2)
         return constants.get(key, key)
-    return variable
+    # An arbitrary receiver name is not a service identity. Keep it unresolved.
+    return ""
 
 
 def _template_url(value: str) -> str:
@@ -633,7 +878,7 @@ def _parse_javascript(text: str, repo_name: str, rel_path: str) -> tuple[list[st
 
     def add_request(method: str, url: str, offset: int) -> None:
         line = _line_number(text, offset)
-        clean_url = _template_url(url)
+        clean_url = _safe_request_url(_template_url(url))
         requests.append(
             APIRequest(
                 _entity_id(repo_name, rel_path, f"request:{method}:{clean_url}:{line}"),
@@ -641,6 +886,7 @@ def _parse_javascript(text: str, repo_name: str, rel_path: str) -> tuple[list[st
                 clean_url,
                 normalize_url(clean_url),
                 line,
+                system=_request_system_name(url),
             )
         )
 
@@ -798,11 +1044,46 @@ def _mask_java_comments(text: str) -> str:
     """Replace Java comments with spaces while preserving strings, offsets, and newlines."""
     def mask_token(match: re.Match[str]) -> str:
         token = match.group(0)
-        if token.startswith(('"', "'")):
+        if token.startswith(('"', "'", "`")):
             return token
         return NON_NEWLINE_RE.sub(" ", token)
 
     return JAVA_COMMENT_TOKEN_RE.sub(mask_token, text)
+
+
+def _mask_python_comments(text: str) -> str:
+    lines = [list(line) for line in text.splitlines(keepends=True)]
+    try:
+        tokens = tokenize.generate_tokens(io.StringIO(text).readline)
+        for token in tokens:
+            if token.type != tokenize.COMMENT:
+                continue
+            row, start = token.start
+            _, end = token.end
+            for index in range(start, min(end, len(lines[row - 1]))):
+                if lines[row - 1][index] not in "\r\n":
+                    lines[row - 1][index] = " "
+    except (IndentationError, tokenize.TokenError):
+        return text
+    return "".join("".join(line) for line in lines)
+
+
+def _mask_evidence_comments(text: str, extension: str) -> str:
+    if extension == ".py":
+        return _mask_python_comments(text)
+    if extension in {".java", ".js", ".jsx", ".ts", ".tsx", ".go"}:
+        return _mask_java_comments(text)
+    masked = re.sub(
+        r"<!--.*?-->",
+        lambda match: NON_NEWLINE_RE.sub(" ", match.group(0)),
+        text,
+        flags=re.DOTALL,
+    )
+    return re.sub(
+        r"(?m)^(\s*)[#;].*$",
+        lambda match: match.group(1) + " " * (len(match.group(0)) - len(match.group(1))),
+        masked,
+    )
 
 
 def _spring_view_route(text: str) -> str | None:
@@ -984,17 +1265,18 @@ def _parse_java(
 
     def add_request(method: str, url: str, offset: int, system: str = "") -> None:
         line = line_at(offset)
-        normalized = normalize_url(url)
+        safe_url = _safe_request_url(url)
+        normalized = normalize_url(safe_url)
         source_function_id, _ = source_method(offset)
         requests.append(
             APIRequest(
                 _entity_id(repo_name, rel_path, f"request:{method}:{normalized}:{line}"),
                 method,
-                url,
+                safe_url,
                 normalized,
                 line,
                 source_function_id,
-                system,
+                system or _request_system_name(url),
             )
         )
 
@@ -1557,9 +1839,14 @@ def parse_file(path: Path, settings: Settings = SETTINGS) -> ParsedFile:
         workflow_processes, workflow_steps, workflow_flows = _parse_bpmn(raw, settings.repo_name, rel_path)
         imports, classes, functions, requests, routes = [], [], [], [], []
         route_path, frameworks, workflow_refs = None, ["flowable"], []
+    elif extension in EVIDENCE_EXTENSIONS or resolved.name.lower() in EVIDENCE_FILE_NAMES:
+        imports, classes, functions, requests, routes = [], [], [], [], []
+        route_path, frameworks, workflow_refs = None, [], []
     else:
         raise ValueError(f"unsupported source extension: {extension}")
-    if extension not in {".java", ".bpmn", ".bpmn20.xml"}:
+    if extension not in {".java", ".bpmn", ".bpmn20.xml"} and not (
+        extension in EVIDENCE_EXTENSIONS or resolved.name.lower() in EVIDENCE_FILE_NAMES
+    ):
         route_path = infer_page_route(rel_path)
         frameworks = []
         workflow_refs = []
@@ -1568,6 +1855,13 @@ def parse_file(path: Path, settings: Settings = SETTINGS) -> ParsedFile:
     if extension != ".java":
         ui_actions, function_calls, process_starts = [], [], []
         message_uses, message_bindings = [], []
+    system_dependencies = []
+    lower_text = text.lower()
+    if any(marker in lower_text for marker in SYSTEM_EVIDENCE_HINTS):
+        evidence_text = _mask_evidence_comments(text, extension)
+        system_dependencies = _parse_system_dependencies(
+            evidence_text, settings.repo_name, rel_path, extension, evidence_text.lower(),
+        )
     return ParsedFile(
         id=f"{settings.repo_name}:{rel_path}",
         path=rel_path,
@@ -1589,6 +1883,17 @@ def parse_file(path: Path, settings: Settings = SETTINGS) -> ParsedFile:
         process_starts=process_starts,
         message_uses=message_uses,
         message_bindings=message_bindings,
+        system_dependencies=system_dependencies,
+    )
+
+
+def is_supported_file(path: Path) -> bool:
+    name = path.name.lower()
+    return (
+        path.suffix.lower() in SOURCE_EXTENSIONS
+        or path.suffix.lower() in EVIDENCE_EXTENSIONS
+        or name in EVIDENCE_FILE_NAMES
+        or name.endswith(".bpmn20.xml")
     )
 
 
@@ -1599,7 +1904,7 @@ def iter_source_files(settings: Settings = SETTINGS) -> list[Path]:
         base = Path(root)
         for name in names:
             path = base / name
-            if path.suffix.lower() in SOURCE_EXTENSIONS or path.name.lower().endswith(".bpmn20.xml"):
+            if is_supported_file(path):
                 files.append(path)
     return sorted(files)
 
@@ -1717,10 +2022,26 @@ UNWIND $rows AS row
 MATCH (a:APIEndpoint {id: row.request_id})
 MERGE (s:ExternalSystem {id: row.system_id})
 SET s.name = row.name, s.repo_name = $repo_name,
+    s.kind = 'http-service', s.technology = 'http', s.role = 'external-http',
+    s.evidence_status = 'OBSERVED',
     s.base_url = coalesce(s.base_url, ''),
     s.path_prefix = coalesce(s.path_prefix, ''),
     s.target_repo = coalesce(s.target_repo, '')
 MERGE (a)-[:TARGETS_SYSTEM]->(s)
+"""
+
+UPSERT_OBSERVED_SYSTEMS = """
+UNWIND $rows AS row
+MATCH (f:CodeFile {id: row.file_id})
+MERGE (s:ExternalSystem {id: row.id})
+SET s.name = row.name, s.kind = row.kind, s.technology = row.technology,
+    s.role = row.role, s.evidence = row.evidence, s.line = row.line,
+    s.scope = row.scope, s.config_key = row.config_key,
+    s.evidence_status = 'OBSERVED', s.repo_name = $repo_name,
+    s.source_file_id = row.file_id,
+    s.base_url = coalesce(s.base_url, ''), s.path_prefix = coalesce(s.path_prefix, ''),
+    s.target_repo = coalesce(s.target_repo, '')
+MERGE (f)-[:USES_SYSTEM {evidence_status: 'OBSERVED'}]->(s)
 """
 
 UPSERT_ROUTES = """
@@ -2118,6 +2439,17 @@ def ingest_files(
         ]
         if system_rows:
             db.execute_write(UPSERT_EXTERNAL_SYSTEMS, repo_name=settings.repo_name, rows=system_rows)
+    observed_system_rows = [
+        dict(asdict(system), file_id=item.id)
+        for item in files
+        for system in item.system_dependencies
+    ]
+    if observed_system_rows:
+        db.execute_write(
+            UPSERT_OBSERVED_SYSTEMS,
+            repo_name=settings.repo_name,
+            rows=observed_system_rows,
+        )
     route_rows = [dict(asdict(route), file_id=item.id) for item in files for route in item.routes]
     if route_rows:
         db.execute_write(UPSERT_ROUTES, repo_name=settings.repo_name, rows=route_rows)

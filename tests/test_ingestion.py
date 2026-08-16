@@ -49,6 +49,26 @@ def health():
         self.assertIn("MATCH (f:CodeFile", prune_query)
         self.assertEqual(prune_parameters["file_ids"], ["repo-a:service.py"])
 
+    def test_surrounding_system_evidence_is_persisted_with_file_ownership(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "application.properties"
+            source.write_text("spring.datasource.url=jdbc:postgresql://db/app\n", encoding="utf-8")
+            settings = Settings(root, "repo-a", "bolt://unused", "neo4j", "x", None, 1.0, frozenset())
+            parsed = parse_file(source, settings)
+            db = FakeDB()
+
+            ingest_files(db, [parsed], settings)
+
+        query, parameters = next(
+            (query, parameters)
+            for query, parameters in db.calls
+            if "USES_SYSTEM" in query
+        )
+        self.assertIn("evidence_status = 'OBSERVED'", query)
+        self.assertEqual(parameters["rows"][0]["technology"], "postgresql")
+        self.assertEqual(parameters["rows"][0]["file_id"], "repo-a:application.properties")
+
     def test_workflow_starts_are_persisted_before_a_process_is_available(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

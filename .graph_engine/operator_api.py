@@ -29,21 +29,25 @@ ORDER BY toLower(r.name)
 
 REQUEST_SUMMARY_QUERY = """
 MATCH (a:APIEndpoint)
-OPTIONAL MATCH (a)-[:TARGETS_ROUTE]->(b:BackendRoute)
+OPTIONAL MATCH (a)-[route:TARGETS_ROUTE]->(b:BackendRoute)
 RETURN a.repo_name AS name, count(DISTINCT a) AS requests,
-       count(DISTINCT CASE WHEN b IS NOT NULL THEN a END) AS resolved
+       count(DISTINCT CASE WHEN b IS NOT NULL THEN a END) AS candidates,
+       count(DISTINCT CASE WHEN route.trust_status = 'VALIDATED' THEN a END) AS resolved
 ORDER BY toLower(a.repo_name)
 """
 
 UNRESOLVED_REQUESTS_QUERY = """
 MATCH (a:APIEndpoint {repo_name: $repo_name})
-WHERE NOT (a)-[:TARGETS_ROUTE]->(:BackendRoute)
+WHERE NOT (a)-[:TARGETS_ROUTE {trust_status: 'VALIDATED'}]->(:BackendRoute)
 OPTIONAL MATCH (p:Page)-[:MAKES_REQUEST]->(a)
 OPTIONAL MATCH (a)-[:TARGETS_SYSTEM]->(s:ExternalSystem)
+OPTIONAL MATCH (a)-[candidate:TARGETS_ROUTE]->(b:BackendRoute)
 RETURN a.id AS id, a.method AS method, a.url AS url,
        a.normalized_url AS normalized_url, a.line AS line,
        a.source_file_id AS source_file_id, p.route_path AS page_route,
-       s.name AS service_key, s.base_url AS base_url, s.target_repo AS target_repo
+       s.name AS service_key, s.base_url AS base_url, s.target_repo AS target_repo,
+       b.repo_name AS candidate_repo, b.route_path AS candidate_route,
+       coalesce(candidate.trust_status, 'SUGGESTED') AS candidate_trust_status
 ORDER BY toLower(coalesce(a.source_file_id, '')), a.line, a.method, a.normalized_url
 LIMIT $limit
 """
@@ -121,11 +125,13 @@ class OperatorService:
             metric = metrics.get(name, {})
             requests = int(metric.get("requests") or 0)
             resolved = int(metric.get("resolved") or 0)
+            candidates = int(metric.get("candidates") or 0)
             rows.append(
                 {
                     **repository,
                     "requests": requests,
                     "resolved": resolved,
+                    "candidates": candidates,
                     "unresolved": max(0, requests - resolved),
                     "coverage": round((resolved / requests * 100) if requests else 100.0, 1),
                     "operable": self.registry.available(name),

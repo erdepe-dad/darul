@@ -9,7 +9,7 @@ from pathlib import Path
 
 from .config import SETTINGS, Settings
 from .db import GraphDB, GraphEngineError
-from .parser import SOURCE_EXTENSIONS, ingest_files, parse_file, reconcile_structural_links
+from .parser import ingest_files, is_supported_file, parse_file, reconcile_structural_links
 from .stitcher import stitch_endpoints
 
 
@@ -145,8 +145,7 @@ def sync_changes(
             structure_changed = True
             changed_file_ids.add(f"{settings.repo_name}:{change.path}")
             continue
-        extension = Path(change.path).suffix.lower()
-        if extension not in SOURCE_EXTENSIONS and not change.path.lower().endswith(".bpmn20.xml"):
+        if not is_supported_file(Path(change.path)):
             result.skipped.append(change.path)
             continue
         if change.status == "D":

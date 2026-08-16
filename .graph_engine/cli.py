@@ -12,6 +12,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from .boundaries import build_boundary_report, render_boundary_text
 from .config import SETTINGS
 from .db import GraphDB, GraphEngineError
 from .hooks.event_logger import record_decision
@@ -46,6 +47,7 @@ def command_build(args: argparse.Namespace) -> int:
                 "symbols": result.symbol_count,
                 "workflow_processes": sum(len(item.workflow_processes) for item in result.files),
                 "workflow_steps": sum(len(item.workflow_steps) for item in result.files),
+                "observed_systems": sum(len(item.system_dependencies) for item in result.files),
                 "skipped": result.skipped_files,
                 "errors": result.errors,
                 "duration_seconds": round(result.duration_seconds, 4),
@@ -65,6 +67,7 @@ def command_build(args: argparse.Namespace) -> int:
             "routes": sum(len(item.routes) for item in result.files),
             "workflow_processes": sum(len(item.workflow_processes) for item in result.files),
             "workflow_steps": sum(len(item.workflow_steps) for item in result.files),
+            "observed_systems": sum(len(item.system_dependencies) for item in result.files),
             "stitched": stitched,
             "skipped": result.skipped_files,
             "errors": result.errors,
@@ -97,6 +100,16 @@ def command_trace(args: argparse.Namespace) -> int:
     else:
         _print_json(result)
     return 0 if result.get("found") else 1
+
+
+def command_boundaries(args: argparse.Namespace) -> int:
+    result = scan_repository()
+    report = build_boundary_report(result)
+    if args.format == "text":
+        print(render_boundary_text(report))
+    else:
+        _print_json(report)
+    return 0 if not result.errors else 1
 
 
 def command_install_hooks(args: argparse.Namespace) -> int:
@@ -233,6 +246,12 @@ def build_parser() -> argparse.ArgumentParser:
     trace.add_argument("--format", choices=("json", "mermaid"), default="json")
     trace.add_argument("--path-limit", type=int, default=1200)
     trace.set_defaults(handler=command_trace)
+
+    boundaries = subparsers.add_parser(
+        "boundaries", help="Report observed external services and surrounding systems"
+    )
+    boundaries.add_argument("--format", choices=("json", "text"), default="text")
+    boundaries.set_defaults(handler=command_boundaries)
 
     install = subparsers.add_parser("install-hooks", help="Install the post-merge Git hook")
     install.set_defaults(handler=command_install_hooks)

@@ -14,7 +14,7 @@ class FakeDB:
         if "MATCH (r:Repository)" in query:
             return [{"name": "sample-web", "root_path": "/srv/sample-web", "updated_at": None, "files": 80}]
         if "MATCH (a:APIEndpoint)" in query and "TARGETS_ROUTE" in query:
-            return [{"name": "sample-web", "requests": 10, "resolved": 4}]
+            return [{"name": "sample-web", "requests": 10, "candidates": 7, "resolved": 4}]
         if "MATCH (s:ExternalSystem)" in query:
             return [{"repo_name": "sample-web", "key": "BACKEND_API_URL"}]
         if "NOT (a)-[:TARGETS_ROUTE]" in query:
@@ -37,6 +37,7 @@ class OperatorServiceTests(unittest.TestCase):
 
         self.assertEqual(result["repositories"][0]["unresolved"], 6)
         self.assertEqual(result["repositories"][0]["coverage"], 40.0)
+        self.assertEqual(result["repositories"][0]["candidates"], 7)
         self.assertTrue(result["repositories"][0]["operable"])
 
     def test_unresolved_limit_is_bounded(self) -> None:

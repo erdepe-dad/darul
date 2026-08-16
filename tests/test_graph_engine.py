@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from graph_engine.hooks.context_inject import render_context
+from graph_engine.hooks.context_inject import HOTSPOTS_QUERY, render_context
 from graph_engine.stitcher import (
     configure_service,
     normalize_url,
@@ -58,6 +58,7 @@ class NormalizationTests(unittest.TestCase):
         exact_query, parameters = db.writes[0]
         self.assertIn("MATCH (a:APIEndpoint)", exact_query)
         self.assertNotIn("repo_name", exact_query)
+        self.assertIn("trust_status = 'SUGGESTED'", exact_query)
         self.assertEqual(parameters, {})
 
     def test_stitching_applies_persisted_service_path_prefixes(self) -> None:
@@ -78,6 +79,7 @@ class NormalizationTests(unittest.TestCase):
         self.assertEqual(stitched, 5)
         mapped_query, parameters = db.writes[-1]
         self.assertIn("configured-prefix", mapped_query)
+        self.assertIn("trust_status = 'SUGGESTED'", mapped_query)
         self.assertEqual(parameters["rows"][0]["normalized_url"], "/api/login")
         self.assertEqual(parameters["rows"][0]["target_repo"], "admin-rest")
 
@@ -98,6 +100,9 @@ class NormalizationTests(unittest.TestCase):
 
 
 class ContextRenderingTests(unittest.TestCase):
+    def test_agent_hotspots_require_validated_routes(self) -> None:
+        self.assertIn("route.trust_status = 'VALIDATED'", HOTSPOTS_QUERY)
+
     def test_decision_lineage_is_delineated(self) -> None:
         rendered = render_context(
             [

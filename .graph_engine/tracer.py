@@ -54,7 +54,7 @@ TRACE_RELATIONSHIPS = [
     "CONTAINS", "DEFINES", "HAS_ACTION", "DECLARES_ACTION", "CALLS", "MAKES_REQUEST",
     "TARGETS_ROUTE", "HANDLED_BY", "STARTS_PROCESS", "HAS_STEP", "NEXT", "INVOKES",
     "TARGETS_SYSTEM", "PUBLISHES_TO", "CONSUMED_BY", "ROUTES_TO", "SAME_CHANNEL",
-    "DECLARES_START", "RESOLVES_TO",
+    "DECLARES_START", "RESOLVES_TO", "USES_SYSTEM",
 ]
 
 
@@ -124,19 +124,20 @@ def _request_resolution_warning(
     resolved = {
         link["source"] for link in links
         if link["type"] == "TARGETS_ROUTE"
+        and (link.get("properties") or {}).get("trust_status") == "VALIDATED"
     }
     unresolved = [node for node in endpoints if node["id"] not in resolved]
     if not unresolved:
         return None
     if len(unresolved) == len(endpoints):
-        return "No API request in this trace resolves to an ingested backend route."
+        return "No API request in this trace has a validated backend route."
     labels = [node["label"] for node in unresolved[:3]]
     detail = "; ".join(labels)
     if len(unresolved) > len(labels):
         detail += f"; +{len(unresolved) - len(labels)} more"
     return (
-        f"{len(unresolved)} of {len(endpoints)} API requests do not resolve to an "
-        f"ingested backend route: {detail}."
+        f"{len(unresolved)} of {len(endpoints)} API requests do not have a validated "
+        f"backend route: {detail}."
     )
 
 
@@ -165,6 +166,20 @@ def _workflow_resolution_warning(
     return (
         f"{len(unresolved)} of {len(starts)} workflow starts do not resolve to an "
         f"ingested BPMN process: {detail}."
+    )
+
+
+def _suggested_route_warning(links: list[dict[str, Any]]) -> str | None:
+    suggested = [
+        link for link in links
+        if link["type"] == "TARGETS_ROUTE"
+        and (link.get("properties") or {}).get("trust_status") != "VALIDATED"
+    ]
+    if not suggested:
+        return None
+    return (
+        f"{len(suggested)} backend route match(es) are auto-discovered candidates, "
+        "not validated runtime topology."
     )
 
 
@@ -298,6 +313,8 @@ def trace_view(
         warnings.append(request_warning)
     if workflow_warning := _workflow_resolution_warning(useful_nodes, useful_links):
         warnings.append(workflow_warning)
+    if suggested_warning := _suggested_route_warning(useful_links):
+        warnings.append(suggested_warning)
     if truncated:
         warnings.append("The trace reached its path limit and may be incomplete.")
     result = {
@@ -340,7 +357,11 @@ def render_mermaid(trace: dict[str, Any]) -> str:
             continue
         props = link.get("properties") or {}
         detail = props.get("condition") or props.get("name") or ("default" if props.get("is_default") else "")
-        label = str(detail or link["type"]).replace('"', "'").replace("\n", " ")[:240]
+        trust_status = str(props.get("trust_status") or "")
+        relationship_label = link["type"]
+        if link["type"] == "TARGETS_ROUTE" and trust_status != "VALIDATED":
+            relationship_label = "SUGGESTED TARGET"
+        label = str(detail or relationship_label).replace('"', "'").replace("\n", " ")[:240]
         arrow = "-.->" if link.get("alternative") else "-->"
         lines.append(f'  {source} {arrow}|"{label}"| {target}')
     return "\n".join(lines)

@@ -53,13 +53,16 @@ class TracerTests(unittest.TestCase):
             }
             for index in range(5)
         }
-        links = [{"source": "0", "target": "route", "type": "TARGETS_ROUTE"}]
+        links = [{
+            "source": "0", "target": "route", "type": "TARGETS_ROUTE",
+            "properties": {"trust_status": "VALIDATED"},
+        }]
 
         warning = _request_resolution_warning(nodes, links)
 
         self.assertEqual(
             warning,
-            "4 of 5 API requests do not resolve to an ingested backend route: "
+            "4 of 5 API requests do not have a validated backend route: "
             "GET /api/items/1; GET /api/items/2; GET /api/items/3; +1 more.",
         )
 
@@ -69,7 +72,10 @@ class TracerTests(unittest.TestCase):
                 "id": "request", "label": "GET /api/items", "labels": ["APIEndpoint"],
             }
         }
-        links = [{"source": "request", "target": "route", "type": "TARGETS_ROUTE"}]
+        links = [{
+            "source": "request", "target": "route", "type": "TARGETS_ROUTE",
+            "properties": {"trust_status": "VALIDATED"},
+        }]
 
         self.assertIsNone(_request_resolution_warning(nodes, links))
 
