@@ -150,6 +150,9 @@ scripts/rotate-neo4j-password.sh
 # Install an idempotent post-merge sync hook without replacing existing hook logic.
 .venv/bin/python3 -m graph_engine.cli install-hooks
 
+# Start the read-only MCP server for coding agents.
+.venv/bin/python3 -m graph_engine.mcp_server
+
 # Start the visualization on localhost.
 .venv/bin/python3 -m graph_engine.cli visualize
 
@@ -158,6 +161,35 @@ scripts/rotate-neo4j-password.sh
 ```
 
 Python cannot execute a leading-dot top-level package with `python -m`. The small `graph_engine/` package is therefore an import bridge to the implementation in `.graph_engine/`.
+
+## Codex MCP integration
+
+Darul includes a read-only stdio MCP server that tells Codex to query the graph before broad filesystem searches. It exposes bounded tools for repository discovery, prompt context, entity search, page inspection, and behavioral traces. Build the target repositories before using the server.
+
+Register the server from the Darul checkout:
+
+```bash
+codex mcp add darul -- /absolute/path/to/darul/scripts/darul-mcp.sh
+```
+
+The launcher resolves the Darul installation, loads the ignored mode-0600 `.graph_engine/neo4j.env`, and preserves Codex's current working directory so the default repository namespace follows the project being worked on. It also works when Codex is launched from Fish because the launcher itself uses Bash.
+
+For a configuration that inherits credentials already exported into Codex's environment instead, use:
+
+```toml
+[mcp_servers.darul]
+command = "/absolute/path/to/darul/.venv/bin/python3"
+args = ["-m", "graph_engine.mcp_server"]
+cwd = "/absolute/path/to/darul"
+env = { PYTHONPATH = "/absolute/path/to/darul" }
+env_vars = ["GRAPH_DB_URI", "GRAPH_DB_USER", "GRAPH_DB_PASS", "GRAPH_DB_DATABASE"]
+startup_timeout_sec = 15
+tool_timeout_sec = 60
+```
+
+Do not put the Neo4j password directly in the `codex mcp add` command or committed configuration.
+
+Run `codex mcp list`, then use `/mcp` inside Codex to confirm that `darul` and its five tools are active. The server is intentionally read-only; run `graph_engine.cli build` or `sync` separately when the graph needs refreshing.
 
 ## Using one database across projects
 
